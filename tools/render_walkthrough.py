@@ -48,21 +48,33 @@ import re
 
 def resolve_gh_path():
     """
-    Accept the .gh path from:
-      1. sys.argv[1]  — when invoked via RunPythonScript('script.py','path.gh')
-      2. GH_FILE env var — useful during development
-    Raises ValueError if neither is set.
+    Resolve the .gh file to render, trying in order:
+      1. sys.argv[1]       — command-line argument
+      2. GH_FILE env var   — useful during development
+      3. Rhino file picker — interactive fallback (friendliest for everyday use)
     """
     if len(sys.argv) > 1 and sys.argv[1].endswith('.gh'):
         return os.path.abspath(sys.argv[1])
+
     env = os.environ.get('GH_FILE', '').strip()
     if env:
         return os.path.abspath(env)
-    raise ValueError(
-        "No .gh file specified.\n"
-        "Pass it as an argument: RunPythonScript('render_walkthrough.py', 'path/to/def.gh')\n"
-        "or set the GH_FILE environment variable."
-    )
+
+    # No path supplied — show a file picker inside Rhino.
+    try:
+        import Rhino
+        dialog = Rhino.UI.OpenFileDialog()
+        dialog.Filter = "Grasshopper definitions (*.gh)|*.gh"
+        dialog.Title = "Choose a Grasshopper definition to document"
+        if dialog.ShowOpenDialog():
+            return os.path.abspath(dialog.FileName)
+        print("No file selected — nothing to do.")
+        sys.exit(0)
+    except Exception as e:
+        raise ValueError(
+            "No .gh file specified and the file picker failed ({}).\n"
+            "Pass the path as an argument or set the GH_FILE env var.".format(e)
+        )
 
 
 # ─── GH document loading ─────────────────────────────────────────────────────
