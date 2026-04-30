@@ -32,7 +32,10 @@ NAMING CONVENTION (required for this script to pick up your groups)
 Groups must be named:  NN — Title
   e.g.  01 — Input,  02 — Surface analysis,  03 — Contour generation
 
-Groups whose name starts with _ are excluded (use for debug/scratch).
+Groups whose name starts with // are excluded — use this to comment out
+debug clusters, scratch work, or anything you don't want documented.
+  e.g.  //debug,  //old contour logic,  //TODO
+
 One logical responsibility per group — split if a group does two things.
 """
 
@@ -89,7 +92,7 @@ def sorted_groups(doc):
         if not isinstance(obj, GH_Group):
             continue
         name = (obj.NickName or '').strip()
-        if not name or name.startswith('_'):
+        if not name or name.startswith('//'):
             continue
         groups.append(obj)
 
