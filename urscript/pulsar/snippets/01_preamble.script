@@ -1,0 +1,17 @@
+# Pulsar preamble — print start
+#
+# Paste at the top of a Grasshopper-emitted print program, immediately after
+# the lib_pulsar.script function defs. Establishes the Duet connection,
+# clears any latched heater faults, blocks until both zones are at temp, and
+# starts continuous extrusion. After this block returns, the screw is turning.
+
+duet_open("172.22.22.100", 23)
+
+if (duet_handshake(2.0) == False):
+  popup("ERROR: Duet did not respond to M115. Aborting.")
+  halt
+end
+
+pulsar_clear_heater_faults()
+pulsar_preheat_pla(190, 215)
+pulsar_start_extrusion(900, 100)
