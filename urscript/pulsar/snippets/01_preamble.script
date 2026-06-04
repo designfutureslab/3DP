@@ -15,3 +15,4 @@ end
 pulsar_clear_heater_faults()
 pulsar_preheat_pla(190, 215)
 pulsar_start_extrusion(900, 100)
+B  
