@@ -11,7 +11,12 @@
 #   4. Show pre-heat temps  9. Shutdown (flow off, motor off, heaters off)
 #   5. Preheat both zones  10. Close socket
 #
-# Single-button popups only — multi-button return values are unreliable on CB3.
+# Notes:
+#   - All helpers take explicit parameters. URScript on CB3 does not reliably
+#     close over outer-scope variables inside nested function bodies — passing
+#     by argument avoids "variable not defined" errors at compile time.
+#   - Single-button popups only. Multi-button popup return values are
+#     unreliable across CB3 versions.
 
 def Program():
 
@@ -62,31 +67,31 @@ def Program():
     sleep(0.1)
   end
 
-  def pulsar_preheat():
+  def pulsar_preheat(z1, z2):
     duet_send_line("T0")
-    duet_send_line("M104 S" + to_str(zone1) + " H0")
-    duet_send_line("M104 S" + to_str(zone2) + " H1")
-    duet_send_line_and_read("M109 S" + to_str(zone1) + " H0", 240.0)
-    duet_send_line_and_read("M109 S" + to_str(zone2) + " H1", 240.0)
+    duet_send_line("M104 S" + to_str(z1) + " H0")
+    duet_send_line("M104 S" + to_str(z2) + " H1")
+    duet_send_line_and_read("M109 S" + to_str(z1) + " H0", 240.0)
+    duet_send_line_and_read("M109 S" + to_str(z2) + " H1", 240.0)
   end
 
-  def pulsar_start():
+  def pulsar_start(f, pct):
     duet_send_line("M83")
     duet_send_line("G92 E0")
-    duet_send_line("M221 S" + to_str(flow))
-    duet_send_line("G1 E1000000 F" + to_str(feed))
+    duet_send_line("M221 S" + to_str(pct))
+    duet_send_line("G1 E1000000 F" + to_str(f))
   end
 
   def pulsar_flow(value):
     duet_send_line("M221 S" + to_str(value))
   end
 
-  def pulsar_retract():
-    duet_send_line("G1 E-" + to_str(retract_mm) + " F" + to_str(retract_feed))
+  def pulsar_retract(mm, f):
+    duet_send_line("G1 E-" + to_str(mm) + " F" + to_str(f))
   end
 
-  def pulsar_unretract():
-    duet_send_line("G1 E" + to_str(retract_mm) + " F" + to_str(retract_feed))
+  def pulsar_unretract(mm, f):
+    duet_send_line("G1 E" + to_str(mm) + " F" + to_str(f))
   end
 
   def pulsar_stop():
@@ -119,17 +124,17 @@ def Program():
   pulsar_show_temp()
 
   popup("5/10  Preheat to " + to_str(zone1) + " / " + to_str(zone2) + " degC")
-  pulsar_preheat()
+  pulsar_preheat(zone1, zone2)
 
   popup("6/10  Start extrusion  (feed=" + to_str(feed) + " flow=" + to_str(flow) + ")")
-  pulsar_start()
+  pulsar_start(feed, flow)
 
   popup("7/10  Layer-change test: flow off, retract")
   pulsar_flow(0)
-  pulsar_retract()
+  pulsar_retract(retract_mm, retract_feed)
 
   popup("8/10  Resume: unretract, flow on")
-  pulsar_unretract()
+  pulsar_unretract(retract_mm, retract_feed)
   pulsar_flow(flow)
 
   popup("9/10  Shutdown: flow off, motor off, heaters off")
