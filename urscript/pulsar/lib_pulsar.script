@@ -65,7 +65,9 @@ end
 # zone1 = barrel/feed   (heater H0)
 # zone2 = nozzle/meter  (heater H1)
 # Blocks until both setpoints are reached (M109 is a blocking wait on Duet).
-def pulsar_preheat_pla(zone1, zone2):
+# Use for unattended / Grasshopper-driven prints. For bench debugging where
+# you want to see progress, use pulsar_preheat_material_polled instead.
+def pulsar_preheat_material(zone1, zone2):
   duet_send_line("T0")
   sleep(0.1)
   duet_send_line("M104 S" + to_str(zone1) + " H0")
@@ -73,6 +75,57 @@ def pulsar_preheat_pla(zone1, zone2):
   sleep(0.1)
   duet_send_line_and_read("M109 S" + to_str(zone1) + " H0", 240.0)
   duet_send_line_and_read("M109 S" + to_str(zone2) + " H1", 240.0)
+end
+
+# Extract the numeric value that follows `tag` in an M105 response. RRF
+# returns lines like:  "ok T:23.5 /190.0 T0:23.5 /190.0 T1:24.0 /215.0"
+# so e.g. parse_temp(resp, "T0:") returns 23.5. Returns -1.0 if not found.
+def parse_temp(resp, tag):
+  idx = str_find(resp, tag)
+  if (idx < 0):
+    return -1.0
+  end
+  start = idx + str_len(tag)
+  tail = str_sub(resp, start)
+  space_idx = str_find(tail, " ")
+  if (space_idx < 0):
+    space_idx = str_len(tail)
+  end
+  num_str = str_sub(tail, 0, space_idx)
+  return to_num(num_str)
+end
+
+# Operator-attended preheat. Sets the targets via M104, then polls M105 in a
+# loop, popping up current vs. target for each zone every iteration. The
+# operator clicks OK to advance to the next poll, so the popup doubles as a
+# manual rate-limiter and an attention gate before the script continues.
+# Exits when both zones are within `tolerance` deg C of target, OR after
+# `max_polls` iterations (safety cap).
+def pulsar_preheat_material_polled(z1, z2, tolerance, max_polls):
+  duet_send_line("T0")
+  sleep(0.1)
+  duet_send_line("M104 S" + to_str(z1) + " H0")
+  duet_send_line("M104 S" + to_str(z2) + " H1")
+  sleep(0.2)
+
+  i = 0
+  reached = False
+  while ((i < max_polls) and (reached == False)):
+    resp = duet_send_line_and_read("M105", 2.0)
+    t0 = parse_temp(resp, "T0:")
+    t1 = parse_temp(resp, "T1:")
+
+    msg = "Preheat poll " + to_str(i + 1) + "/" + to_str(max_polls) + "\n"
+    msg = msg + "Zone 1: " + to_str(t0) + " / " + to_str(z1) + " degC\n"
+    msg = msg + "Zone 2: " + to_str(t1) + " / " + to_str(z2) + " degC"
+    popup(msg)
+
+    if ((t0 >= (z1 - tolerance)) and (t1 >= (z2 - tolerance))):
+      reached = True
+    end
+
+    i = i + 1
+  end
 end
 
 # Begin continuous extrusion. After this returns, the screw is turning.

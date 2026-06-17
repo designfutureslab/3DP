@@ -13,6 +13,6 @@ if (duet_handshake(2.0) == False):
 end
 
 pulsar_clear_heater_faults()
-pulsar_preheat_pla(190, 215)
+pulsar_preheat_material(190, 215)
 pulsar_start_extrusion(900, 100)
 B  

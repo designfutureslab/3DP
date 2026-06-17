@@ -44,9 +44,24 @@ modulate flow with `M221`.
 | Function | Purpose |
 |---|---|
 | `pulsar_clear_heater_faults()` | `M562` — clear any latched fault state. |
-| `pulsar_preheat_pla(zone1, zone2)` | Set both setpoints + block until reached. |
+| `pulsar_preheat_material(zone1, zone2)` | Set both setpoints + block on `M109` until reached. Unattended-friendly, silent. |
+| `pulsar_preheat_material_polled(z1, z2, tolerance, max_polls)` | Set both setpoints + poll `M105` in a loop with a popup per poll. Operator-attended, exits on target ±`tolerance` or `max_polls`. |
+| `parse_temp(resp, tag)` | Helper — extract numeric value following `tag` (e.g. `"T0:"`) in an `M105` response. Returns `-1.0` if not found. |
 | `pulsar_cooldown()` | Set both zones to 0 °C. |
 | `pulsar_show_temp()` | Pop up current `M105` reading. |
+
+#### Preheat strategies
+
+Two variants, pick by use case:
+
+| When | Use | Behaviour |
+|---|---|---|
+| Grasshopper-driven print, no operator at the pendant | `pulsar_preheat_material` | Sends `M104` setpoints, then blocks on `M109` until each zone is at temp. No popups, no feedback — script just sits silently for 3–5 min. Fast path to "ready". |
+| Bench testing, debug harness, anything where you want eyes on the heat-up | `pulsar_preheat_material_polled` | Sends `M104` setpoints, then loops `M105` polls with one popup per iteration showing current vs. target for both zones. Operator clicks OK to advance. Exits when both zones reach `target − tolerance` or after `max_polls` polls. |
+
+The blocking version's silent wait was confusing in early bench tests
+(no popup for the full preheat duration looked like the script had hung).
+The polled version makes progress visible at the cost of click-through.
 
 ### Extrusion
 | Function | Purpose |
@@ -58,17 +73,17 @@ modulate flow with `M221`.
 | `pulsar_unretract(mm, feed)` | Relative-E unretract. |
 | `pulsar_stop_extrusion()` | Flow off + `M84 E`. |
 
-## Default parameters (PLA pellets, baseline)
+## Default parameters (Material, baseline)
 
 | Parameter | Value | Notes |
 |---|---|---|
-| Zone 1 (barrel) | 190 °C | feed / compression — heater `H0` |
-| Zone 2 (nozzle) | 215 °C | metering — heater `H1` |
+| Zone 1 (barrel) | 190 °C | feed / compression — heater `H0`. PLA values; PETG typically needs higher (≈ 220 / 245). |
+| Zone 2 (nozzle) | 215 °C | metering — heater `H1`. PLA values; PETG typically needs higher. |
 | UR motion speed | 0.035 m/s | ≈ 35 mm/s |
 | Layer height | 1.0 mm | |
 | Bead width | 2.5 mm | |
 | Volumetric flow | ≈ 90 mm³/s | layer × width × speed |
-| Throughput | ≈ 400 g/h | PLA at 1.24 g/cm³ |
+| Throughput | ≈ 400 g/h | at material density ≈ 1.25 g/cm³ |
 | Retract | 3 mm @ 600 mm/min | |
 | Continuous-extrude feed (`F`) | 900 mm/min | tune to match volumetric target |
 | Initial flow (`M221 S`) | 100 % | per-layer trim with `M221` |
@@ -100,7 +115,7 @@ fixed time at flow 100 %.
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| Robot reaches preheat but Pulsar doesn't heat | Heater fault latched | Run `pulsar_clear_heater_faults()` before `pulsar_preheat_pla()`. |
+| Robot reaches preheat but Pulsar doesn't heat | Heater fault latched | Run `pulsar_clear_heater_faults()` before `pulsar_preheat_material()`. |
 | `M109` never returns | Heater hardware fault, or thermistor disconnected | Check Duet web UI; clear faults; verify wiring. |
 | Bead too thin | Flow % too low, or feed too low, or motion too fast | Raise `M221 S`, raise `feed`, or slow UR motion. |
 | Bead too thick | Inverse of above. | |
