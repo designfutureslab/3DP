@@ -44,9 +44,24 @@ modulate flow with `M221`.
 | Function | Purpose |
 |---|---|
 | `pulsar_clear_heater_faults()` | `M562` — clear any latched fault state. |
-| `pulsar_preheat_pla(zone1, zone2)` | Set both setpoints + block until reached. |
+| `pulsar_preheat_pla(zone1, zone2)` | Set both setpoints + block on `M109` until reached. Unattended-friendly, silent. |
+| `pulsar_preheat_pla_polled(z1, z2, tolerance, max_polls)` | Set both setpoints + poll `M105` in a loop with a popup per poll. Operator-attended, exits on target ±`tolerance` or `max_polls`. |
+| `parse_temp(resp, tag)` | Helper — extract numeric value following `tag` (e.g. `"T0:"`) in an `M105` response. Returns `-1.0` if not found. |
 | `pulsar_cooldown()` | Set both zones to 0 °C. |
 | `pulsar_show_temp()` | Pop up current `M105` reading. |
+
+#### Preheat strategies
+
+Two variants, pick by use case:
+
+| When | Use | Behaviour |
+|---|---|---|
+| Grasshopper-driven print, no operator at the pendant | `pulsar_preheat_pla` | Sends `M104` setpoints, then blocks on `M109` until each zone is at temp. No popups, no feedback — script just sits silently for 3–5 min. Fast path to "ready". |
+| Bench testing, debug harness, anything where you want eyes on the heat-up | `pulsar_preheat_pla_polled` | Sends `M104` setpoints, then loops `M105` polls with one popup per iteration showing current vs. target for both zones. Operator clicks OK to advance. Exits when both zones reach `target − tolerance` or after `max_polls` polls. |
+
+The blocking version's silent wait was confusing in early bench tests
+(no popup for the full preheat duration looked like the script had hung).
+The polled version makes progress visible at the cost of click-through.
 
 ### Extrusion
 | Function | Purpose |
