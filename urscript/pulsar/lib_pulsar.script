@@ -65,8 +65,8 @@ end
 # zone2 = nozzle/meter  (heater H1)
 # Blocks until both setpoints are reached (M109 is a blocking wait on Duet).
 # Use for unattended / Grasshopper-driven prints. For bench debugging where
-# you want to see progress, use pulsar_preheat_pla_polled instead.
-def pulsar_preheat_pla(zone1, zone2):
+# you want to see progress, use pulsar_preheat_material_polled instead.
+def pulsar_preheat_material(zone1, zone2):
   duet_send_line("T0")
   sleep(0.1)
   duet_send_line("M104 S" + to_str(zone1) + " H0")
@@ -100,7 +100,7 @@ end
 # manual rate-limiter and an attention gate before the script continues.
 # Exits when both zones are within `tolerance` deg C of target, OR after
 # `max_polls` iterations (safety cap).
-def pulsar_preheat_pla_polled(z1, z2, tolerance, max_polls):
+def pulsar_preheat_material_polled(z1, z2, tolerance, max_polls):
   duet_send_line("T0")
   sleep(0.1)
   duet_send_line("M104 S" + to_str(z1) + " H0")

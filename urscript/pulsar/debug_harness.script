@@ -71,7 +71,7 @@ def Program():
     sleep(0.1)
   end
 
-  def pulsar_preheat(z1, z2):
+  def pulsar_preheat_material(z1, z2):
     duet_send_line("T0")
     duet_send_line("M104 S" + to_str(z1) + " H0")
     duet_send_line("M104 S" + to_str(z2) + " H1")
@@ -98,7 +98,7 @@ def Program():
   # Polled preheat: set M104 targets, then loop M105 with a popup per poll
   # showing both zone temps. Exits when both reach target - tolerance, or
   # after max_polls iterations.
-  def pulsar_preheat_polled(z1, z2, tol, max_polls):
+  def pulsar_preheat_material_polled(z1, z2, tol, max_polls):
     duet_send_line("T0")
     sleep(0.1)
     duet_send_line("M104 S" + to_str(z1) + " H0")
@@ -174,7 +174,7 @@ def Program():
   pulsar_show_temp()
 
   popup("5/10  Polled preheat to " + to_str(zone1) + " / " + to_str(zone2) + " degC  (click through each poll)")
-  pulsar_preheat_polled(zone1, zone2, preheat_tolerance, preheat_max_polls)
+  pulsar_preheat_material_polled(zone1, zone2, preheat_tolerance, preheat_max_polls)
 
   popup("6/10  Start extrusion  (feed=" + to_str(feed) + " flow=" + to_str(flow) + ")")
   pulsar_start(feed, flow)
