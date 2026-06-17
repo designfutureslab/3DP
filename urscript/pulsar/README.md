@@ -44,24 +44,9 @@ modulate flow with `M221`.
 | Function | Purpose |
 |---|---|
 | `pulsar_clear_heater_faults()` | `M562` — clear any latched fault state. |
-| `pulsar_preheat_material(zone1, zone2)` | Set both setpoints + block on `M109` until reached. Unattended-friendly, silent. |
-| `pulsar_preheat_material_polled(z1, z2, tolerance, max_polls)` | Set both setpoints + poll `M105` in a loop with a popup per poll. Operator-attended, exits on target ±`tolerance` or `max_polls`. |
-| `parse_temp(resp, tag)` | Helper — extract numeric value following `tag` (e.g. `"T0:"`) in an `M105` response. Returns `-1.0` if not found. |
+| `pulsar_preheat_material(zone1, zone2)` | Set both setpoints + block on `M109` until reached. |
 | `pulsar_cooldown()` | Set both zones to 0 °C. |
 | `pulsar_show_temp()` | Pop up current `M105` reading. |
-
-#### Preheat strategies
-
-Two variants, pick by use case:
-
-| When | Use | Behaviour |
-|---|---|---|
-| Grasshopper-driven print, no operator at the pendant | `pulsar_preheat_material` | Sends `M104` setpoints, then blocks on `M109` until each zone is at temp. No popups, no feedback — script just sits silently for 3–5 min. Fast path to "ready". |
-| Bench testing, debug harness, anything where you want eyes on the heat-up | `pulsar_preheat_material_polled` | Sends `M104` setpoints, then loops `M105` polls with one popup per iteration showing current vs. target for both zones. Operator clicks OK to advance. Exits when both zones reach `target − tolerance` or after `max_polls` polls. |
-
-The blocking version's silent wait was confusing in early bench tests
-(no popup for the full preheat duration looked like the script had hung).
-The polled version makes progress visible at the cost of click-through.
 
 ### Extrusion
 | Function | Purpose |
@@ -117,6 +102,9 @@ fixed time at flow 100 %.
 |---|---|---|
 | Robot reaches preheat but Pulsar doesn't heat | Heater fault latched | Run `pulsar_clear_heater_faults()` before `pulsar_preheat_material()`. |
 | `M109` never returns | Heater hardware fault, or thermistor disconnected | Check Duet web UI; clear faults; verify wiring. |
+| One zone overshoots target by >10 °C while the other holds | PID untuned for that heater, or thermistor / heater wiring swapped | Run `M303 H<n> S<target>` from DWC with the barrel empty to auto-tune. Verify each `H` index drives the right physical heater. |
+| DWC console fills with "move duration too long" every few seconds | Polyscope is looping the program, re-sending `G1 E10000 F900` and the rest of the sequence | Set the UR program to "Run once" instead of continuous loop. |
+| Same error on the very first run | `G1 E...` value is too large — RRF caps single-move duration at ~10 min | Reduce the `E` constant in `pulsar_start_extrusion`. `E10000 F900` ≈ 11 min is the default ceiling. |
 | Bead too thin | Flow % too low, or feed too low, or motion too fast | Raise `M221 S`, raise `feed`, or slow UR motion. |
 | Bead too thick | Inverse of above. | |
 | Extruder stalls | Feed (`F`) too high for screw torque | Lower `feed`, raise zone 1 temp slightly. |
