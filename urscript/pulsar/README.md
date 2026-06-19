@@ -1,25 +1,48 @@
-# Pulsar Atom + Duet 3 — UR5 CB3 control library
+# Pulsar Atom + Duet 3 — UR5 CB3 control library (daemon-driven)
 
 URScript helpers for driving a Pulsar Atom pellet extruder (Duet 3 /
-RepRapFirmware) from a Universal Robots UR5 (CB3 controller) over a Telnet
-socket.
+RepRapFirmware) from a Universal Robots UR5 (CB3 controller) over a
+Telnet socket. **All extrusion state lives on the Duet** — this library
+is now a thin wrapper around Duet-side macros invoked via `M98`.
 
-## What this is
+## Architecture
 
 The UR robot owns motion. The Duet owns extrusion. They communicate over
-TCP/23 (Telnet) with a small set of G-code messages. Real-time
-synchronisation is deliberately avoided — the screw runs continuously and we
-modulate flow with `M221`.
+TCP/23 (Telnet) with a small set of `M98` calls — start, stop, flow,
+retract, preheat. A background daemon on the Duet keeps the screw
+turning while a `pulsar_running` flag is set; the UR doesn't have to
+think about move-duration limits or top-up timing.
 
 ```
-        UR5 CB3                    Duet 3 / Pulsar Atom
-        +------+   socket "duet"   +-------------------+
-        |  UR  |  ───────────────► | RepRapFirmware    |
-        | URS  |    Telnet :23     | M104/M109/M221/G1 |
-        +------+                   +-------------------+
+                        Duet 3 / Pulsar Atom
+                       ┌──────────────────────────────────────┐
+   UR5 CB3             │ globals: pulsar_running, feed, chunk │
+   ┌──────┐            │                                      │
+   │  UR  │ ─telnet─►  │   M98 P"pulsar_start.g" F900 R100    │
+   │ URS  │  M98 only  │   → sets globals                     │
+   └──────┘            │                                      │
+                       │   0:/sys/daemon.g (background)       │
+                       │   ┌──────────────────────────────┐   │
+                       │   │ if pulsar_running:           │   │
+                       │   │   G1 E{chunk} F{feed}        │   │
+                       │   │   G4 S{dwell}                │   │
+                       │   └──────────────────────────────┘   │
+                       └──────────────────────────────────────┘
 ```
 
-## Files
+## Required Duet-side setup
+
+See `/duet/` in this repo. Briefly:
+
+1. Upload `/duet/sys/daemon.g` and `/duet/sys/pulsar_init.g` to the
+   Duet's `0:/sys/`.
+2. Upload all `/duet/macros/pulsar_*.g` files to `0:/macros/`.
+3. Add `M98 P"pulsar_init.g"` to `config.g`.
+4. Reboot the Duet.
+
+Detailed install + verification steps live in `/duet/README.md`.
+
+## Files in this directory
 
 | File | Purpose |
 |---|---|
@@ -41,58 +64,61 @@ modulate flow with `M221`.
 | `duet_handshake(timeout)` | Send `M115` and verify a response. Returns `True` / `False`. |
 
 ### Heating
-| Function | Purpose |
-|---|---|
-| `pulsar_clear_heater_faults()` | `M562` — clear any latched fault state. |
-| `pulsar_preheat_material(zone1, zone2)` | Set both setpoints + block on `M109` until reached. |
-| `pulsar_cooldown()` | Set both zones to 0 °C. |
-| `pulsar_show_temp()` | Pop up current `M105` reading. |
+| Function | Wraps | Purpose |
+|---|---|---|
+| `pulsar_clear_heater_faults()` | `M98 P"pulsar_clear_faults.g"` | Clear latched heater faults. |
+| `pulsar_preheat(barrel, nozzle)` | `M98 P"pulsar_preheat.g" B<barrel> N<nozzle>` | Set both setpoints + block until reached. |
+| `pulsar_cooldown()` | `M98 P"pulsar_cooldown.g"` | Both zones to 0 °C, tool off. |
+| `pulsar_show_temp()` | `M105` (direct) | Pop up current temp reading. |
 
 ### Extrusion
-| Function | Purpose |
-|---|---|
-| `pulsar_start_extrusion(feed, flow)` | Begin continuous extrusion at `flow %` and `feed mm/min`. |
-| `pulsar_flow_on(flow)` | Set `M221 S<flow>`. |
-| `pulsar_flow_off()` | Set `M221 S0`. |
-| `pulsar_retract(mm, feed)` | Relative-E retract. |
-| `pulsar_unretract(mm, feed)` | Relative-E unretract. |
-| `pulsar_stop_extrusion()` | Flow off + `M84 E`. |
+| Function | Wraps | Purpose |
+|---|---|---|
+| `pulsar_start_extrusion(feed, flow)` | `M98 P"pulsar_start.g" F<feed> R<flow>` | Start the daemon — screw begins turning. |
+| `pulsar_flow_on(flow)` | `M98 P"pulsar_flow.g" S<flow>` | Set M221 flow %. |
+| `pulsar_flow_off()` | `M98 P"pulsar_flow.g" S0` | M221 S0 — bead off, daemon keeps queueing. |
+| `pulsar_retract(mm, feed)` | `M98 P"pulsar_retract.g" S<mm> F<feed>` | Relative-E retract. |
+| `pulsar_unretract(mm, feed)` | `M98 P"pulsar_unretract.g" S<mm> F<feed>` | Relative-E unretract. |
+| `pulsar_stop_extrusion()` | `M98 P"pulsar_stop.g"` | Clear pulsar_running, zero flow, release motor. |
 
-## Default parameters (Material, baseline)
+## Default parameters (PLA baseline)
 
 | Parameter | Value | Notes |
 |---|---|---|
-| Zone 1 (barrel) | 190 °C | feed / compression — heater `H0`. PLA values; PETG typically needs higher (≈ 220 / 245). |
-| Zone 2 (nozzle) | 215 °C | metering — heater `H1`. PLA values; PETG typically needs higher. |
+| Barrel zone (H0, "Top") | 190 °C | feed / compression. PLA values; for PETG try 220 °C. |
+| Nozzle zone (H1, "Bottom") | 215 °C | metering / exit. PLA values; for PETG try 245 °C. |
 | UR motion speed | 0.035 m/s | ≈ 35 mm/s |
 | Layer height | 1.0 mm | |
 | Bead width | 2.5 mm | |
 | Volumetric flow | ≈ 90 mm³/s | layer × width × speed |
 | Throughput | ≈ 400 g/h | at material density ≈ 1.25 g/cm³ |
 | Retract | 3 mm @ 600 mm/min | |
-| Continuous-extrude feed (`F`) | 900 mm/min | tune to match volumetric target |
+| Feed (`F`) | 900 mm/min | screw rate; tune to match volumetric target |
+| Chunk (`pulsar_chunk`) | 1000 mm | daemon-side; ≈ 67 s of extrusion at F900 |
 | Initial flow (`M221 S`) | 100 % | per-layer trim with `M221` |
 
-The continuous `G1 E... F...` does not encode volumetric flow directly — it
-encodes screw speed via the extruder's steps/mm calibration. Calibrate
-`feed` empirically against the 90 mm³/s target by weighing extrudate over a
-fixed time at flow 100 %.
+The continuous chunks emitted by the daemon don't encode volumetric flow
+directly — they encode screw speed via the extruder's steps/mm
+calibration. Calibrate `feed` empirically against the 90 mm³/s target by
+weighing extrudate over a fixed time at flow 100 %.
 
 ## Workflow
 
-1. **Bench-test** with `debug_harness.script` running directly on the UR.
-   Step through every popup, watching the Pulsar respond at each stage.
+1. **Bench-test** with `debug_harness.script` running directly on the
+   UR. Step through every popup, watching the Pulsar respond at each
+   stage.
 2. **Print** by chaining: `01_preamble` → motion + per-layer
-   `pulsar_flow_on` / `02_layer_change` pairs → `03_end_print`, all generated
-   by Grasshopper.
+   `pulsar_flow_on` / `02_layer_change` pairs → `03_end_print`, all
+   generated by Grasshopper.
 
 ## Design rules
 
-- Minimise telnet calls. One per state change. Never per motion segment.
-- Never block on motion completion to send a socket command. The two run
-  on independent timelines.
-- Keep URScript linear. No multi-button popups. No conditional branching on
-  socket return values beyond pass/fail.
+- One telnet call per state change. The daemon handles all in-between
+  pacing.
+- Never block on motion completion to send a socket command. UR and
+  Duet run on independent timelines.
+- Keep URScript linear. No multi-button popups. No conditional branching
+  on socket return values beyond pass/fail.
 - All numbers are constants at the top of the script. Grasshopper writes
   the constants; the helper logic stays the same.
 
@@ -100,14 +126,15 @@ fixed time at flow 100 %.
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| Robot reaches preheat but Pulsar doesn't heat | Heater fault latched | Run `pulsar_clear_heater_faults()` before `pulsar_preheat_material()`. |
-| `M109` never returns | Heater hardware fault, or thermistor disconnected | Check Duet web UI; clear faults; verify wiring. |
-| One zone overshoots target by >10 °C while the other holds | PID untuned for that heater, or thermistor / heater wiring swapped | Run `M303 H<n> S<target>` from DWC with the barrel empty to auto-tune. Verify each `H` index drives the right physical heater. |
-| DWC console fills with "move duration too long" every few seconds | Polyscope is looping the program, re-sending `G1 E10000 F900` and the rest of the sequence | Set the UR program to "Run once" instead of continuous loop. |
-| Same error on the very first run | `G1 E...` value is too large — RRF caps single-move duration at ~10 min | Reduce the `E` constant in `pulsar_start_extrusion`. `E10000 F900` ≈ 11 min is the default ceiling. |
+| Macros not found — `M98` errors with "file not found" | Macros not uploaded to `0:/macros/` | Re-upload from `/duet/macros/` and confirm filenames include `.g`. |
+| `echo global.pulsar_running` returns nothing | `pulsar_init.g` not called from `config.g` | Add `M98 P"pulsar_init.g"` to `config.g` and reboot. |
+| Robot reaches preheat but Pulsar doesn't heat | Heater fault latched | Call `pulsar_clear_heater_faults()` before `pulsar_preheat()`. |
+| `pulsar_preheat()` never returns | Heater hardware fault, thermistor disconnected, or M116 not reaching tolerance | Check Duet web UI; clear faults; verify wiring; check `M116` tolerance in RRF. |
+| One zone overshoots target by >10 °C while the other holds | PID untuned for that heater, or thermistor / heater wiring swapped | Run `M303 H<n> S<target>` with the barrel empty. Verify each `Hn` drives the right physical zone via isolation test (see commit history). |
+| Screw stalls briefly every minute | `pulsar_dwell` too long | From DWC console: `set global.pulsar_dwell = <smaller>`. Recover stable value, then update the default in `pulsar_init.g`. |
+| "Move duration too long" reappears | `pulsar_chunk` too large for current feed | Lower `global.pulsar_chunk` (default 1000 should be safe for F up to ~9000). |
 | Bead too thin | Flow % too low, or feed too low, or motion too fast | Raise `M221 S`, raise `feed`, or slow UR motion. |
 | Bead too thick | Inverse of above. | |
-| Extruder stalls | Feed (`F`) too high for screw torque | Lower `feed`, raise zone 1 temp slightly. |
 | Stringing between layers | Retract too small or unretract too soon | Increase `retract_mm`; lift Z before unretract. |
 | `socket_open` returns true but no comms | Cable, IP mismatch, or firewall | Run `duet_handshake()` after open and verify `M115` response. |
 
@@ -122,10 +149,12 @@ fixed time at flow 100 %.
 
 ## RepRapFirmware notes
 
-- `M104 Sxxx Hn` / `M109 Sxxx Hn` use the heater index. Verify your Duet
-  config maps `H0` to the barrel and `H1` to the nozzle. If you migrate to a
-  different firmware, switch to `M116 Hn` for the wait.
-- `M221 S0` is "no flow" — the long G1 is still queued, the multiplier just
-  pins the screw speed at 0. The pellet screw stops cleanly.
-- `M84 E` releases only the extruder motor. The XYZ steppers aren't involved
-  here — UR controls all motion.
+- The tool definition `M563 P0 D0 H1:0` means tool 0's heaters are
+  ordered `[H1, H0]`. Position 0 in the colon-list is H1 (nozzle);
+  position 1 is H0 (barrel). `pulsar_preheat.g` knows this and
+  constructs `M568` accordingly.
+- After the cs1↔cs2 swap in `M308`, H0 is the **Top / barrel / feed**
+  zone and H1 is the **Bottom / nozzle / metering** zone.
+- `M221 S0` is "no flow" — the daemon keeps queueing chunks, the
+  multiplier just pins the screw speed at 0. The pellet screw stops
+  cleanly without disturbing the move queue.

@@ -1,26 +1,22 @@
 
 # Pulsar Atom + Duet 3 helper library for UR5 CB3 (URScript / Polyscope 3.x)
 #
-# This file is the function library only. It contains no top-level execution.
-# Use it one of two ways:
-#   1. Paste the function defs inside a `def Program(): ... end` block on the
-#      teach pendant, then call them in the order you want.
-#   2. Have Grasshopper emit a full program that inlines these defs verbatim
-#      followed by the print's motion + flow commands.
+# DAEMON ARCHITECTURE — all extrusion state lives on the Duet. This library
+# is now a thin wrapper that fires Duet-side macros via M98. The Duet's
+# `0:/sys/daemon.g` keeps the screw turning while `global.pulsar_running`
+# is true, so the UR no longer has to think about move-duration limits or
+# top-up timing.
 #
-# Communication model:
-#   - One named TCP socket: "duet" (port 23 / Telnet).
-#   - All extruder state is changed by sending one G-code line per call.
-#   - Duet returns plain-text responses; we only read them when we need to
-#     gate on something (preheat wait, handshake).
+# Required Duet-side setup (see /duet/ in this repo):
+#   - `0:/sys/daemon.g` and `0:/sys/pulsar_init.g` uploaded
+#   - `M98 P"pulsar_init.g"` added to `config.g`
+#   - All `0:/macros/pulsar_*.g` macros uploaded
 #
-# Control model:
-#   - Continuous extrusion: a long `G1 E... F...` keeps the screw turning.
-#     The value of E is bounded — see pulsar_start_extrusion for the limit.
-#   - Flow modulation: `M221 S<percent>` per layer / per section.
-#   - Retraction: relative-E moves (`M83`, then `G1 E-x` / `G1 E+x`).
-#   - No real-time sync between UR motion and the extruder. Everything is a
-#     state change, not a per-segment instruction.
+# Use this file one of two ways:
+#   1. Paste the function defs inside a `def Program(): ... end` block on
+#      the teach pendant, then call them in the order you want.
+#   2. Have Grasshopper emit a full program that inlines these defs
+#      verbatim followed by the print's motion + flow commands.
 
 # ---------- low-level Duet I/O ----------
 
@@ -45,8 +41,8 @@ def duet_send_line_and_read(line, timeout):
   return resp
 end
 
-# socket_open's return value is unreliable on CB3, so we verify connectivity
-# by sending M115 and checking that any response came back.
+# socket_open's return value is unreliable on CB3, so we verify
+# connectivity by sending M115 and checking that any response came back.
 def duet_handshake(timeout):
   resp = duet_send_line_and_read("M115", timeout)
   if (resp != ""):
@@ -58,64 +54,54 @@ end
 # ---------- Pulsar high-level functions ----------
 
 def pulsar_clear_heater_faults():
-  duet_send_line("M562")
+  duet_send_line("M98 P\"pulsar_clear_faults.g\"")
   sleep(0.1)
 end
 
-# zone1 = barrel/feed   (heater H0)
-# zone2 = nozzle/meter  (heater H1)
-# Blocks until both setpoints are reached (M109 is a blocking wait on Duet).
-def pulsar_preheat_material(zone1, zone2):
-  duet_send_line("T0")
-  sleep(0.1)
-  duet_send_line("M104 S" + to_str(zone1) + " H0")
-  duet_send_line("M104 S" + to_str(zone2) + " H1")
-  sleep(0.1)
-  duet_send_line_and_read("M109 S" + to_str(zone1) + " H0", 240.0)
-  duet_send_line_and_read("M109 S" + to_str(zone2) + " H1", 240.0)
+# Set both zone targets and block until both reach setpoint.
+# barrel = H0 ("Top"  label) — feed/compression zone
+# nozzle = H1 ("Bottom" label) — metering/exit zone
+# Blocks on the Duet side via M116. The 600s URScript timeout is a generous
+# cap on how long the script will wait for the preheat response.
+def pulsar_preheat(barrel, nozzle):
+  cmd = "M98 P\"pulsar_preheat.g\" B" + to_str(barrel) + " N" + to_str(nozzle)
+  duet_send_line_and_read(cmd, 600.0)
 end
 
-# Begin continuous extrusion. After this returns, the screw is turning.
-# `feed` is the F-value (mm/min) for the long G1 E... move — i.e. screw rate,
-# NOT UR motion speed. `flow` is the starting M221 multiplier in percent.
-#
-# E10000 at F900 = ~11 minutes of continuous screw motion. Larger values
-# trip RRF's "move duration too long" check (it rejects single moves whose
-# planned duration exceeds ~10 min). For prints longer than the chunk, the
-# UR can re-issue this call to top up the queue.
+# Begin continuous extrusion via the Duet daemon. After this returns, the
+# screw is turning and the daemon will keep the move queue topped up.
 def pulsar_start_extrusion(feed, flow):
-  duet_send_line("M83")
-  duet_send_line("G92 E0")
-  duet_send_line("M221 S" + to_str(flow))
-  duet_send_line("G1 E10000 F" + to_str(feed))
+  cmd = "M98 P\"pulsar_start.g\" F" + to_str(feed) + " R" + to_str(flow)
+  duet_send_line(cmd)
 end
 
 def pulsar_flow_on(flow):
-  duet_send_line("M221 S" + to_str(flow))
+  duet_send_line("M98 P\"pulsar_flow.g\" S" + to_str(flow))
 end
 
 def pulsar_flow_off():
-  duet_send_line("M221 S0")
+  duet_send_line("M98 P\"pulsar_flow.g\" S0")
 end
 
-# Use after pulsar_flow_off() and before a UR travel move.
+# Retract / unretract. Use after pulsar_flow_off() and before a UR travel
+# move. The daemon keeps queueing extrusion chunks behind your retract, so
+# don't sit retracted for more than the chunk duration or the screw will
+# resume pushing material before you've unretracted.
 def pulsar_retract(mm, feed):
-  duet_send_line("G1 E-" + to_str(mm) + " F" + to_str(feed))
+  duet_send_line("M98 P\"pulsar_retract.g\" S" + to_str(mm) + " F" + to_str(feed))
 end
 
 def pulsar_unretract(mm, feed):
-  duet_send_line("G1 E" + to_str(mm) + " F" + to_str(feed))
+  duet_send_line("M98 P\"pulsar_unretract.g\" S" + to_str(mm) + " F" + to_str(feed))
 end
 
 # Stop the screw cleanly. Heaters stay on.
 def pulsar_stop_extrusion():
-  pulsar_flow_off()
-  duet_send_line("M84 E")
+  duet_send_line("M98 P\"pulsar_stop.g\"")
 end
 
 def pulsar_cooldown():
-  duet_send_line("M104 S0 H0")
-  duet_send_line("M104 S0 H1")
+  duet_send_line("M98 P\"pulsar_cooldown.g\"")
 end
 
 # Pop up the current M105 reading. Diagnostic helper.

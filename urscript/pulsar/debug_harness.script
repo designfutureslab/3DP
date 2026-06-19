@@ -1,27 +1,25 @@
-# Pulsar Atom + Duet 3 — UR5 CB3 debug harness
+# Pulsar Atom + Duet 3 — UR5 CB3 debug harness (daemon architecture)
 #
-# Standalone, fully-formed URScript program. Run directly on the teach pendant
-# to exercise every helper end-to-end with popups between each step. Use this
-# to validate the workflow before driving it from Grasshopper.
+# Standalone, fully-formed URScript program. Run directly on the teach
+# pendant to exercise the daemon-based extrusion control end-to-end with
+# popups between each step. Use this to validate the workflow before
+# driving it from Grasshopper.
 #
-# IMPORTANT: set the program to "Run once" on the pendant. Polyscope's
-# default is to loop, which will re-send the preheat / extrude / cooldown
-# sequence every few seconds — and the long G1 E... move will be rejected
-# repeatedly by RRF with "move duration too long".
+# IMPORTANT — Duet-side setup required before running:
+#   - Upload `0:/sys/daemon.g`, `0:/sys/pulsar_init.g`, and the
+#     `0:/macros/pulsar_*.g` macros from this repo's /duet/ folder.
+#   - Add `M98 P"pulsar_init.g"` to config.g and reboot the Duet.
+#
+# IMPORTANT — Polyscope: set the program to "Run once". Continuous loop
+# mode will re-fire M98 P"pulsar_start.g" every few seconds, which won't
+# break anything but will spam the Duet log.
 #
 # Sequence:
-#   1. Open socket          6. Start continuous extrusion
+#   1. Open socket          6. Start extrusion (daemon takes over)
 #   2. Handshake (M115)     7. Layer-change test (flow off + retract)
 #   3. Clear heater faults  8. Resume (unretract + flow on)
-#   4. Show pre-heat temps  9. Shutdown (flow off, motor off, heaters off)
+#   4. Show pre-heat temps  9. Shutdown (flow off, motor off, cooldown)
 #   5. Preheat both zones  10. Close socket
-#
-# Notes:
-#   - All helpers take explicit parameters. URScript on CB3 does not reliably
-#     close over outer-scope variables inside nested function bodies — passing
-#     by argument avoids "variable not defined" errors at compile time.
-#   - Single-button popups only. Multi-button popup return values are
-#     unreliable across CB3 versions.
 
 def Program():
 
@@ -31,13 +29,13 @@ def Program():
   ip = "172.22.22.100"
   port = 23
 
-  # temps (deg C)
-  zone1 = 190                  # H0  barrel / feed
-  zone2 = 215                  # H1  nozzle / metering
+  # temps (deg C) — PLA values. PETG: try barrel=220, nozzle=245.
+  barrel = 190
+  nozzle = 215
 
   # extrusion
-  feed = 900                   # mm/min  feedrate of the long G1 E... move
-  flow = 100                   # %       initial M221 multiplier
+  feed = 900                   # mm/min  — screw rate (chunks are F'd at this)
+  flow = 100                   # %       — initial M221 multiplier
 
   # retraction
   retract_mm = 3.0
@@ -65,46 +63,38 @@ def Program():
     return resp
   end
 
-  # ---------------- PULSAR ----------------
+  # ---------------- PULSAR (M98 wrappers) ----------------
 
   def pulsar_clear_faults():
-    duet_send_line("M562")
+    duet_send_line("M98 P\"pulsar_clear_faults.g\"")
     sleep(0.1)
   end
 
-  def pulsar_preheat_material(z1, z2):
-    duet_send_line("T0")
-    duet_send_line("M104 S" + to_str(z1) + " H0")
-    duet_send_line("M104 S" + to_str(z2) + " H1")
-    duet_send_line_and_read("M109 S" + to_str(z1) + " H0", 240.0)
-    duet_send_line_and_read("M109 S" + to_str(z2) + " H1", 240.0)
+  def pulsar_preheat(b, n):
+    cmd = "M98 P\"pulsar_preheat.g\" B" + to_str(b) + " N" + to_str(n)
+    duet_send_line_and_read(cmd, 600.0)
   end
 
-  # E10000 at F900 = ~11 min. Larger E trips RRF "move duration too long".
   def pulsar_start(f, pct):
-    duet_send_line("M83")
-    duet_send_line("G92 E0")
-    duet_send_line("M221 S" + to_str(pct))
-    duet_send_line("G1 E10000 F" + to_str(f))
+    cmd = "M98 P\"pulsar_start.g\" F" + to_str(f) + " R" + to_str(pct)
+    duet_send_line(cmd)
   end
 
   def pulsar_flow(value):
-    duet_send_line("M221 S" + to_str(value))
+    duet_send_line("M98 P\"pulsar_flow.g\" S" + to_str(value))
   end
 
   def pulsar_retract(mm, f):
-    duet_send_line("G1 E-" + to_str(mm) + " F" + to_str(f))
+    duet_send_line("M98 P\"pulsar_retract.g\" S" + to_str(mm) + " F" + to_str(f))
   end
 
   def pulsar_unretract(mm, f):
-    duet_send_line("G1 E" + to_str(mm) + " F" + to_str(f))
+    duet_send_line("M98 P\"pulsar_unretract.g\" S" + to_str(mm) + " F" + to_str(f))
   end
 
   def pulsar_stop():
-    pulsar_flow(0)
-    duet_send_line("M84 E")
-    duet_send_line("M104 S0 H0")
-    duet_send_line("M104 S0 H1")
+    duet_send_line("M98 P\"pulsar_stop.g\"")
+    duet_send_line("M98 P\"pulsar_cooldown.g\"")
   end
 
   def pulsar_show_temp():
@@ -123,16 +113,16 @@ def Program():
     popup("WARNING: no response from Duet. Check IP / cable / firmware.")
   end
 
-  popup("3/10  Clear heater faults (M562)")
+  popup("3/10  Clear heater faults")
   pulsar_clear_faults()
 
   popup("4/10  Show temps before preheat")
   pulsar_show_temp()
 
-  popup("5/10  Preheat to " + to_str(zone1) + " / " + to_str(zone2) + " degC  (blocking M109 wait)")
-  pulsar_preheat_material(zone1, zone2)
+  popup("5/10  Preheat to barrel=" + to_str(barrel) + " nozzle=" + to_str(nozzle) + " degC (blocking)")
+  pulsar_preheat(barrel, nozzle)
 
-  popup("6/10  Start extrusion  (feed=" + to_str(feed) + " flow=" + to_str(flow) + ")")
+  popup("6/10  Start extrusion — daemon takes over (feed=" + to_str(feed) + " flow=" + to_str(flow) + ")")
   pulsar_start(feed, flow)
 
   popup("7/10  Layer-change test: flow off, retract")
@@ -143,7 +133,7 @@ def Program():
   pulsar_unretract(retract_mm, retract_feed)
   pulsar_flow(flow)
 
-  popup("9/10  Shutdown: flow off, motor off, heaters off")
+  popup("9/10  Shutdown: stop daemon, cool down")
   pulsar_stop()
 
   popup("10/10  Close socket")

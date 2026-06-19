@@ -1,7 +1,8 @@
 # Pulsar end-of-print
 #
-# Stop extrusion, set both heater zones to 0, close the socket. The robot
-# should already have parked at a safe position before this block runs.
+# Stops the daemon, sets both heater targets to 0, closes the socket.
+# The robot should already have parked at a safe position before this
+# block runs.
 
 pulsar_stop_extrusion()
 pulsar_cooldown()

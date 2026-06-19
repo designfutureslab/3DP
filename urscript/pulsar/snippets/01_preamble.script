@@ -1,9 +1,12 @@
 # Pulsar preamble — print start
 #
-# Paste at the top of a Grasshopper-emitted print program, immediately after
-# the lib_pulsar.script function defs. Establishes the Duet connection,
-# clears any latched heater faults, blocks until both zones are at temp, and
-# starts continuous extrusion. After this block returns, the screw is turning.
+# Paste at the top of a Grasshopper-emitted print program, immediately
+# after the lib_pulsar.script function defs. Connects to the Duet, clears
+# heater faults, blocks until both zones are at temp, then starts the
+# extrusion daemon. After this block returns, the screw is turning and
+# the daemon is auto-topping-up the queue.
+#
+# Temps below are PLA. For PETG try barrel=220, nozzle=245.
 
 duet_open("172.22.22.100", 23)
 
@@ -13,6 +16,5 @@ if (duet_handshake(2.0) == False):
 end
 
 pulsar_clear_heater_faults()
-pulsar_preheat_material(190, 215)
+pulsar_preheat(190, 215)
 pulsar_start_extrusion(900, 100)
-B  
