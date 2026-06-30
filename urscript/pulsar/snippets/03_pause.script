@@ -1,0 +1,17 @@
+# Pulsar Pause — scripted mid-print pause for inserts / inspection.
+#
+# Stops the bead, retracts, blocks on a popup, then unretracts and
+# resumes flow when the operator clicks OK. The screw stays parked
+# during the popup because M221 S0 pins the multiplier at zero — the
+# daemon keeps queueing chunks but no material flows.
+#
+# Set the resume flow % to match the layer's active flow at the
+# insertion point (default 100 below).
+
+pulsar_flow_off()
+pulsar_retract(3.0, 600)
+
+popup("Insert hardware now. Click OK to resume.", title="Pause", warning=False, error=False, blocking=True)
+
+pulsar_unretract(3.0, 600)
+pulsar_flow_on(100)

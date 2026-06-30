@@ -1,0 +1,12 @@
+# Pulsar Start — wait for ready, operator gate, begin extrusion.
+#
+# Paste after the initial home movej, BEFORE the first print move.
+# wait_for_pulsar_enabled blocks on the Duet→UR ready DIO in
+# production; it's a no-op while debug_pulsar_ready=True. The popup is
+# the final operator gate before the screw starts turning.
+
+wait_for_pulsar_enabled(debug_pulsar_ready, pulsar_ready_pin)
+
+popup("Press Ready to start your print", title="Operator_Safety", warning=False, error=False, blocking=True)
+
+pulsar_start_extrusion(900, 100)
