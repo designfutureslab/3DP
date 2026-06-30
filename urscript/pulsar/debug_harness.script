@@ -1,9 +1,17 @@
-# Pulsar Atom + Duet 3 — UR5 CB3 debug harness (daemon architecture)
+# Pulsar Atom + Duet 3 — UR5 CB3 debug harness (daemon + DIO gate)
 #
 # Standalone, fully-formed URScript program. Run directly on the teach
 # pendant to exercise the daemon-based extrusion control end-to-end with
 # popups between each step. Use this to validate the workflow before
 # driving it from Grasshopper.
+#
+# Architecture:
+#   - All extrusion state lives on the Duet (sys/daemon.g + macros).
+#   - UR fires Duet macros via M98 over Telnet.
+#   - UR waits for the Duet's "ready" signal via a hardware DIO line
+#     (the Duet asserts an output when M116 completes; the UR reads it).
+#   - Until the wire is in place, debug_mode=True turns the wait into an
+#     operator-confirmation popup.
 #
 # IMPORTANT — Duet-side setup required before running:
 #   - Upload `0:/sys/daemon.g`, `0:/sys/pulsar_init.g`, and the
@@ -11,15 +19,15 @@
 #   - Add `M98 P"pulsar_init.g"` to config.g and reboot the Duet.
 #
 # IMPORTANT — Polyscope: set the program to "Run once". Continuous loop
-# mode will re-fire M98 P"pulsar_start.g" every few seconds, which won't
-# break anything but will spam the Duet log.
+# mode will re-fire M98 P"pulsar_start.g" every few seconds.
 #
 # Sequence:
-#   1. Open socket          6. Start extrusion (daemon takes over)
-#   2. Handshake (M115)     7. Layer-change test (flow off + retract)
-#   3. Clear heater faults  8. Resume (unretract + flow on)
-#   4. Show pre-heat temps  9. Shutdown (flow off, motor off, cooldown)
-#   5. Preheat both zones  10. Close socket
+#   1. Open socket          7. Confirm "Start print" (operator)
+#   2. Handshake (M115)     8. Start extrusion (daemon takes over)
+#   3. Clear heater faults  9. Layer-change test
+#   4. Show pre-heat temps 10. Resume (unretract + flow on)
+#   5. Preheat (async)     11. Shutdown (stop daemon, cooldown)
+#   6. Wait for ready DIO  12. Close socket
 
 def Program():
 
@@ -40,6 +48,12 @@ def Program():
   # retraction
   retract_mm = 3.0
   retract_feed = 600           # mm/min
+
+  # ready signal
+  # debug_mode=True  → operator popup ("click OK when heaters are at temp")
+  # debug_mode=False → poll standard digital input `ready_pin` until high
+  debug_mode = True
+  ready_pin = 0                # UR standard digital input wired to Duet DIO
 
   # ---------------- HELPERS ----------------
 
@@ -70,9 +84,10 @@ def Program():
     sleep(0.1)
   end
 
+  # Fire-and-forget — Duet handles the M116 wait, then asserts ready DIO.
   def pulsar_preheat(b, n):
     cmd = "M98 P\"pulsar_preheat.g\" B" + to_str(b) + " N" + to_str(n)
-    duet_send_line_and_read(cmd, 600.0)
+    duet_send_line(cmd)
   end
 
   def pulsar_start(f, pct):
@@ -102,41 +117,63 @@ def Program():
     popup("Temp:\n" + resp)
   end
 
+  # ---------- ready-signal gates ----------
+
+  def wait_for_ready(dbg, pin):
+    if (dbg == True):
+      popup("Waiting for Pulsar.\n\nIn the Duet web control, verify both heater zones have reached their target temperature.\n\nClick OK to proceed.")
+    else:
+      while (get_standard_digital_in(pin) == False):
+        sleep(0.5)
+      end
+    end
+  end
+
+  def confirm_start():
+    popup("Pulsar is ready.\n\nClick OK to START THE PRINT.")
+  end
+
   # ---------------- EXECUTION ----------------
 
-  popup("1/10  Connect to Duet at " + ip)
+  popup("1/12  Connect to Duet at " + ip)
   duet_open(ip, port)
 
-  popup("2/10  Handshake (M115)")
+  popup("2/12  Handshake (M115)")
   resp = duet_send_line_and_read("M115", 2.0)
   if (resp == ""):
     popup("WARNING: no response from Duet. Check IP / cable / firmware.")
   end
 
-  popup("3/10  Clear heater faults")
+  popup("3/12  Clear heater faults")
   pulsar_clear_faults()
 
-  popup("4/10  Show temps before preheat")
+  popup("4/12  Show temps before preheat")
   pulsar_show_temp()
 
-  popup("5/10  Preheat to barrel=" + to_str(barrel) + " nozzle=" + to_str(nozzle) + " degC (blocking)")
+  popup("5/12  Request preheat (async) to barrel=" + to_str(barrel) + " nozzle=" + to_str(nozzle))
   pulsar_preheat(barrel, nozzle)
 
-  popup("6/10  Start extrusion — daemon takes over (feed=" + to_str(feed) + " flow=" + to_str(flow) + ")")
+  popup("6/12  Wait for Pulsar ready signal")
+  wait_for_ready(debug_mode, ready_pin)
+
+  popup("7/12  Confirm start")
+  confirm_start()
+
+  popup("8/12  Start extrusion — daemon takes over (feed=" + to_str(feed) + " flow=" + to_str(flow) + ")")
   pulsar_start(feed, flow)
 
-  popup("7/10  Layer-change test: flow off, retract")
+  popup("9/12  Layer-change test: flow off, retract")
   pulsar_flow(0)
   pulsar_retract(retract_mm, retract_feed)
 
-  popup("8/10  Resume: unretract, flow on")
+  popup("10/12  Resume: unretract, flow on")
   pulsar_unretract(retract_mm, retract_feed)
   pulsar_flow(flow)
 
-  popup("9/10  Shutdown: stop daemon, cool down")
+  popup("11/12  Shutdown: stop daemon, cool down")
   pulsar_stop()
 
-  popup("10/10  Close socket")
+  popup("12/12  Close socket")
   duet_close()
 
   popup("Debug harness complete")

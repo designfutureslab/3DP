@@ -31,6 +31,8 @@ periodically. Moving the keep-it-spinning logic onto the Duet:
 | `macros/pulsar_unretract.g` | `0:/macros/pulsar_unretract.g` | Relative-E unretract. |
 | `macros/pulsar_cooldown.g` | `0:/macros/pulsar_cooldown.g` | Both zone targets to 0, tool off. |
 | `macros/pulsar_clear_faults.g` | `0:/macros/pulsar_clear_faults.g` | `M562` on both heaters. |
+| `macros/pulsar_signal_ready.g` | `0:/macros/pulsar_signal_ready.g` | Assert the Duet→UR "ready" DIO. Called automatically from `pulsar_preheat.g`. **Placeholder — uncomment the `M42` line once the wire is in place.** |
+| `macros/pulsar_signal_clear.g` | `0:/macros/pulsar_signal_clear.g` | Drop the Duet→UR "ready" DIO. Called automatically from `pulsar_stop.g` and `pulsar_cooldown.g`. Same `M42` placeholder. |
 
 ## One-time install
 
@@ -95,6 +97,31 @@ wrap each of these.
   queued chunk exceeds RRF's move-duration cap, you'll see "move
   duration too long" again. Raise dwell or lower chunk.
 
+## Duet→UR ready signal (hardware DIO)
+
+The UR no longer polls the Duet to know when it's safe to start motion —
+the Duet asserts a digital output once both heaters reach setpoint and
+the UR reads that as a digital input.
+
+```
+   Duet 3 (out6 / out7 / ioN)              UR5 CB3
+   ┌────────────────┐                      ┌────────────────┐
+   │ M42 P<pin> S1  │ ───── 24 V wire ─────│ DI<n>          │
+   │ when ready     │                      │ get_standard_  │
+   │                │ ◄──── 0 V (GND) ─────│  digital_in()  │
+   └────────────────┘                      └────────────────┘
+```
+
+`pulsar_preheat.g` fires `M98 P"pulsar_signal_ready.g"` after its
+`M116` returns; `pulsar_stop.g` and `pulsar_cooldown.g` fire
+`M98 P"pulsar_signal_clear.g"`. Both signal macros currently have their
+`M42` line commented — uncomment with the correct Duet output pin once
+the wire is in.
+
+On the UR side, `wait_for_pulsar_enabled(debug, pin)` blocks until the
+input goes high. While `debug=True`, it shows a confirmation popup
+instead, so the workflow is fully testable without the wire.
+
 ## Safety
 
 - The daemon does **not** check heater state. If you fire
@@ -106,3 +133,7 @@ wrap each of these.
   `M0` or `M112` (emergency stop) instead.
 - The existing `M570 H0 P600 / M570 H1 P600` thermal-runaway timeouts
   in `config.g` apply unchanged.
+- Future: the same DIO pattern can carry e-stop / pause state both ways.
+  E.g., a second wire UR→Duet that the Duet's `daemon.g` reads — when
+  low, the daemon stops queueing chunks and clears flow. Not implemented
+  yet; design is open.

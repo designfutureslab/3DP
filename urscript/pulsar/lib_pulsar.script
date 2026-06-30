@@ -58,14 +58,44 @@ def pulsar_clear_heater_faults():
   sleep(0.1)
 end
 
-# Set both zone targets and block until both reach setpoint.
+# Set both zone targets. Fire-and-forget — the Duet's pulsar_preheat.g
+# blocks via M116 until both heaters are at temp, then asserts the
+# Duet→UR ready DIO via pulsar_signal_ready.g. The UR doesn't wait on
+# this socket call; it waits on the hardware signal via
+# wait_for_pulsar_enabled().
+#
 # barrel = H0 ("Top"  label) — feed/compression zone
 # nozzle = H1 ("Bottom" label) — metering/exit zone
-# Blocks on the Duet side via M116. The 600s URScript timeout is a generous
-# cap on how long the script will wait for the preheat response.
 def pulsar_preheat(barrel, nozzle):
   cmd = "M98 P\"pulsar_preheat.g\" B" + to_str(barrel) + " N" + to_str(nozzle)
-  duet_send_line_and_read(cmd, 600.0)
+  duet_send_line(cmd)
+end
+
+# Block until the Pulsar reports ready.
+#
+#   debug=True:  pop up a confirmation. Operator watches DWC, clicks OK
+#                when both zones are at temp. Use this until the Duet→UR
+#                DIO wire is in place.
+#   debug=False: poll UR digital input `pin` until it goes high. The
+#                Duet's pulsar_signal_ready.g sets that pin via M42 once
+#                pulsar_preheat.g's M116 completes.
+#
+# Either way the script blocks here until the Pulsar is ready.
+def wait_for_pulsar_enabled(debug, pin):
+  if (debug == True):
+    popup("Waiting for Pulsar.\n\nIn the Duet web control, verify that both heater zones have reached their target temperature.\n\nClick OK to proceed.")
+  else:
+    while (get_standard_digital_in(pin) == False):
+      sleep(0.5)
+    end
+  end
+end
+
+# Final operator gate before motion begins. Returns when the operator
+# acknowledges. Keep this in production too — it's the "I'm standing
+# next to the machine and everything looks fine" checkpoint.
+def confirm_start_print():
+  popup("Pulsar is ready.\n\nClick OK to START THE PRINT.")
 end
 
 # Begin continuous extrusion via the Duet daemon. After this returns, the
