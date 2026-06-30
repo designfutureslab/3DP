@@ -12,6 +12,18 @@ The GH component has four inputs we care about:
 | **Command code** | URScript that gets injected **inline** at the position of this component in the program flow. |
 | **Declaration** | URScript that gets injected **at the top of `Program()`**, alongside `pulsarTcp`, `pulsarWeight`, etc. — variables, constants, and function definitions live here. |
 
+### Indentation rule (important)
+
+The GH plugin auto-indents only the **first line** of each Declaration
+and Command code field to match the surrounding `Program()` context (2
+spaces). Every subsequent line is passed through verbatim. So you must
+manually prepend 2 spaces to every line after the first; function
+bodies inside a `def ... end` block need 4 spaces. The first line is
+the exception — leave it with no leading spaces, GH will indent it.
+
+All the code blocks below are already pre-indented to this rule.
+Paste them in as-is.
+
 Four mandatory components cover any print; four more are optional for
 mid-print pauses, layer-change retraction, and flow trim. The
 operator-facing popups ("Press Ready", "Job Complete", "Pause") live
@@ -71,94 +83,94 @@ all config constants in one shot.
 **Name**: `Pulsar Setup`
 **Manufacturer**: `UR`
 
-**Declaration** *(paste as-is)*:
+**Declaration** *(paste as-is — pre-indented per the rule above)*:
 
 ```
 debug_pulsar_ready = True
-pulsar_ready_pin   = 0
+  pulsar_ready_pin   = 0
 
-def duet_open(ip, port):
-  socket_open(ip, port, "duet")
-  sleep(0.2)
-end
-
-def duet_close():
-  socket_close("duet")
-end
-
-def duet_send_line(line):
-  socket_send_line(line, "duet")
-end
-
-def duet_send_line_and_read(line, timeout):
-  socket_send_line(line, "duet")
-  sleep(0.05)
-  resp = socket_read_string("duet", "", "", False, timeout)
-  return resp
-end
-
-def duet_handshake(timeout):
-  resp = duet_send_line_and_read("M115", timeout)
-  if (resp != ""):
-    return True
+  def duet_open(ip, port):
+    socket_open(ip, port, "duet")
+    sleep(0.2)
   end
-  return False
-end
 
-def pulsar_clear_heater_faults():
-  duet_send_line("M98 P\"pulsar_clear_faults.g\"")
-  sleep(0.1)
-end
+  def duet_close():
+    socket_close("duet")
+  end
 
-def pulsar_preheat(barrel, nozzle):
-  cmd = "M98 P\"pulsar_preheat.g\" B" + to_str(barrel) + " N" + to_str(nozzle)
-  duet_send_line(cmd)
-end
+  def duet_send_line(line):
+    socket_send_line(line, "duet")
+  end
 
-def wait_for_pulsar_enabled(debug, pin):
-  if (debug == False):
-    while (get_standard_digital_in(pin) == False):
-      sleep(0.5)
+  def duet_send_line_and_read(line, timeout):
+    socket_send_line(line, "duet")
+    sleep(0.05)
+    resp = socket_read_string("duet", "", "", False, timeout)
+    return resp
+  end
+
+  def duet_handshake(timeout):
+    resp = duet_send_line_and_read("M115", timeout)
+    if (resp != ""):
+      return True
+    end
+    return False
+  end
+
+  def pulsar_clear_heater_faults():
+    duet_send_line("M98 P\"pulsar_clear_faults.g\"")
+    sleep(0.1)
+  end
+
+  def pulsar_preheat(barrel, nozzle):
+    cmd = "M98 P\"pulsar_preheat.g\" B" + to_str(barrel) + " N" + to_str(nozzle)
+    duet_send_line(cmd)
+  end
+
+  def wait_for_pulsar_enabled(debug, pin):
+    if (debug == False):
+      while (get_standard_digital_in(pin) == False):
+        sleep(0.5)
+      end
     end
   end
-end
 
-def pulsar_start_extrusion(feed, flow):
-  cmd = "M98 P\"pulsar_start.g\" F" + to_str(feed) + " R" + to_str(flow)
-  duet_send_line(cmd)
-end
+  def pulsar_start_extrusion(feed, flow):
+    cmd = "M98 P\"pulsar_start.g\" F" + to_str(feed) + " R" + to_str(flow)
+    duet_send_line(cmd)
+  end
 
-def pulsar_flow_on(flow):
-  duet_send_line("M98 P\"pulsar_flow.g\" S" + to_str(flow))
-end
+  def pulsar_flow_on(flow):
+    duet_send_line("M98 P\"pulsar_flow.g\" S" + to_str(flow))
+  end
 
-def pulsar_flow_off():
-  duet_send_line("M98 P\"pulsar_flow.g\" S0")
-end
+  def pulsar_flow_off():
+    duet_send_line("M98 P\"pulsar_flow.g\" S0")
+  end
 
-def pulsar_retract(mm, feed):
-  duet_send_line("M98 P\"pulsar_retract.g\" S" + to_str(mm) + " F" + to_str(feed))
-end
+  def pulsar_retract(mm, feed):
+    duet_send_line("M98 P\"pulsar_retract.g\" S" + to_str(mm) + " F" + to_str(feed))
+  end
 
-def pulsar_unretract(mm, feed):
-  duet_send_line("M98 P\"pulsar_unretract.g\" S" + to_str(mm) + " F" + to_str(feed))
-end
+  def pulsar_unretract(mm, feed):
+    duet_send_line("M98 P\"pulsar_unretract.g\" S" + to_str(mm) + " F" + to_str(feed))
+  end
 
-def pulsar_stop_extrusion():
-  duet_send_line("M98 P\"pulsar_stop.g\"")
-end
+  def pulsar_stop_extrusion():
+    duet_send_line("M98 P\"pulsar_stop.g\"")
+  end
 
-def pulsar_cooldown():
-  duet_send_line("M98 P\"pulsar_cooldown.g\"")
-end
+  def pulsar_cooldown():
+    duet_send_line("M98 P\"pulsar_cooldown.g\"")
+  end
 ```
 
 **Command code**:
 
 ```
 duet_open("172.22.22.100", 23)
-pulsar_clear_heater_faults()
-pulsar_preheat(190, 215)
+  pulsar_clear_heater_faults()
+  pulsar_preheat(190, 215)
 ```
 
 Wire `190` and `215` to GH inputs for barrel/nozzle temps.
@@ -178,8 +190,8 @@ production), pop the operator gate, then start the daemon.
 
 ```
 wait_for_pulsar_enabled(debug_pulsar_ready, pulsar_ready_pin)
-popup("Press Ready to start your print", title="Operator_Safety", warning=False, error=False, blocking=True)
-pulsar_start_extrusion(900, 100)
+  popup("Press Ready to start your print", title="Operator_Safety", warning=False, error=False, blocking=True)
+  pulsar_start_extrusion(900, 100)
 ```
 
 | Substitute in | Default | Purpose |
@@ -205,9 +217,9 @@ already shut down.
 
 ```
 pulsar_flow_off()
-pulsar_retract(3.0, 600)
-pulsar_stop_extrusion()
-pulsar_cooldown()
+  pulsar_retract(3.0, 600)
+  pulsar_stop_extrusion()
+  pulsar_cooldown()
 ```
 
 | Substitute in | Default | Purpose |
@@ -230,7 +242,7 @@ point, so the operator can safely tidy up.
 
 ```
 popup("Job Complete! Please put all the caps back on the pens and tidy up!", title="Job_Done", warning=False, error=False, blocking=True)
-duet_close()
+  duet_close()
 ```
 
 | Substitute in | Default | Purpose |
@@ -258,10 +270,10 @@ zero even though the daemon keeps queueing chunks.
 
 ```
 pulsar_flow_off()
-pulsar_retract(3.0, 600)
-popup("Insert hardware now. Click OK to resume.", title="Pause", warning=False, error=False, blocking=True)
-pulsar_unretract(3.0, 600)
-pulsar_flow_on(100)
+  pulsar_retract(3.0, 600)
+  popup("Insert hardware now. Click OK to resume.", title="Pause", warning=False, error=False, blocking=True)
+  pulsar_unretract(3.0, 600)
+  pulsar_flow_on(100)
 ```
 
 | Substitute in | Default | Purpose |
@@ -278,14 +290,14 @@ pulsar_flow_on(100)
 
 ```
 pulsar_flow_off()
-pulsar_retract(3.0, 600)
+  pulsar_retract(3.0, 600)
 ```
 
 ### 7. Pulsar Post-Travel (after each travel `movej`)
 
 ```
 pulsar_unretract(3.0, 600)
-pulsar_flow_on(100)
+  pulsar_flow_on(100)
 ```
 
 ### 8. Pulsar Flow (anywhere mid-print)
