@@ -338,6 +338,87 @@ Strings (popup text, title) need to be quoted in the URScript output
 — same as today. Pipe them in the same way you pipe the numeric
 inputs.
 
+## Placeholder-substitution versions
+
+If your GH definition uses find-and-replace tokens to inject values
+into Custom Command fields, here are the same blocks with our standard
+placeholders pre-wired:
+
+| Placeholder | Maps to |
+|---|---|
+| `[Barrell]` | Barrel zone target temp (°C) |
+| `[Nozzle]` | Nozzle zone target temp (°C) |
+| `[Popup]` | Popup message text |
+| `[LD]` | Retract distance (mm) |
+| `[LE]` | Retract extrusion rate (mm/min) |
+| `[%]` | Flow scale (%) |
+
+### Setup — Command code
+
+```
+duet_open("172.22.22.100", 23)
+  pulsar_clear_heater_faults()
+  pulsar_preheat([Barrell], [Nozzle])
+```
+
+### Start — Command code
+
+```
+wait_for_pulsar_enabled(debug_pulsar_ready, pulsar_ready_pin)
+  popup("[Popup]", title="Operator_Safety", warning=False, error=False, blocking=True)
+  pulsar_start_extrusion(900, [%])
+```
+
+### Stop — Command code
+
+```
+pulsar_flow_off()
+  pulsar_retract([LD], [LE])
+  pulsar_stop_extrusion()
+  pulsar_cooldown()
+```
+
+### End — Command code
+
+```
+popup("[Popup]", title="Job_Done", warning=False, error=False, blocking=True)
+  duet_close()
+```
+
+### Pause — Command code
+
+```
+pulsar_flow_off()
+  pulsar_retract([LD], [LE])
+  popup("[Popup]", title="Pause", warning=False, error=False, blocking=True)
+  pulsar_unretract([LD], [LE])
+  pulsar_flow_on([%])
+```
+
+### Pre-Travel — Command code
+
+```
+pulsar_flow_off()
+  pulsar_retract([LD], [LE])
+```
+
+### Post-Travel — Command code
+
+```
+pulsar_unretract([LD], [LE])
+  pulsar_flow_on([%])
+```
+
+### Flow — Command code
+
+```
+pulsar_flow_on([%])
+```
+
+The `900` (Start feed F-value) and `"172.22.22.100"` (Duet IP) aren't
+templated — add `[F]` / `[IP]` placeholders to taste if you want to
+parameterise them too.
+
 ## Switching to production (DIO wired)
 
 Two edits in **Pulsar Setup's Declaration**:
