@@ -48,9 +48,10 @@ Detailed install + verification steps live in `/duet/README.md`.
 |---|---|
 | `lib_pulsar.script` | Function library only — no execution. Inline into a `Program()` block, or paste into a Grasshopper-emitted script. |
 | `debug_harness.script` | Standalone runnable program. Steps through every helper with popups. Use this on the robot to validate the workflow before wiring up Grasshopper. |
-| `snippets/01_preamble.script` | Print-start block for Grasshopper-emitted programs. |
-| `snippets/02_layer_change.script` | Layer-change block for Grasshopper-emitted programs. |
-| `snippets/03_end_print.script` | End-of-print block for Grasshopper-emitted programs. |
+| `grasshopper-integration.md` | **Map of GH Custom Command components** — Name, Declaration, and Command code for each insertion point. Read this when wiring the helpers into a GH-generated print program. |
+| `snippets/01_preamble.script` | Print-start block (reference; the GH integration guide is the authoritative source). |
+| `snippets/02_layer_change.script` | Layer-change block (reference). |
+| `snippets/03_end_print.script` | End-of-print block (reference). |
 
 ## Function reference
 
