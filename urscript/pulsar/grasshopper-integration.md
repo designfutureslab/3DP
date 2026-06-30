@@ -7,23 +7,23 @@ The GH component has four inputs we care about:
 
 | Input | What it does |
 |---|---|
-| **Name** | Identifier shown in the GH canvas. Free-form. |
+| **Name** | Identifier on the GH canvas. Free-form. |
 | **Manufacturer** | `UR`. |
 | **Command code** | URScript that gets injected **inline** at the position of this component in the program flow. |
 | **Declaration** | URScript that gets injected **at the top of `Program()`**, alongside `pulsarTcp`, `pulsarWeight`, etc. — variables, constants, and function definitions live here. |
 
-You'll set up six components total. Three are essential for any print;
-three more are for layer-change retraction / mid-print flow tweaks.
+Three components cover any print. The operator popups that used to be
+their own GH `Popup` components are now folded into **Pulsar Start**
+(the "Press Ready" gate) and **Pulsar End** (the "Job Complete"
+notice) — the popup text stays parameterised from GH inputs the same
+way the temperatures and feeds do.
 
 ---
 
 ## Reference output
 
-This is what the final program looks like after all the Custom Commands
-have fired. Lines marked `<<< CC: <name>` show where each component
-injects code. Compare against `PULSTEST9.urp` — the `movej` calls are
-identical to GH's output, the `<<<` lines are what each Custom Command
-adds.
+Compare against `PULSTEST9.urp` — the `movej` calls are GH's existing
+output. The `<<<` lines show where each Custom Command injects.
 
 ```python
 def Program():
@@ -33,7 +33,7 @@ def Program():
   Speed000 = 0.1
   Zone000 = 0.001
 
-  # <<< CC: Pulsar Setup — its Declaration block goes here:
+  # <<< CC: Pulsar Setup — Declaration block:
   debug_pulsar_ready = True
   pulsar_ready_pin   = 0
   def duet_open(ip, port): ... end
@@ -55,58 +55,55 @@ def Program():
   set_tcp(pulsarTcp)
   set_payload(pulsarWeight, pulsarCog)
 
-  # <<< CC: Pulsar Setup — its Command code goes here:
+  # <<< CC: Pulsar Setup — Command code:
   duet_open("172.22.22.100", 23)
   pulsar_clear_heater_faults()
   pulsar_preheat(190, 215)
 
   movej([0.1073, -1.5563, ...], a=3.1416, v=0.3142, r=Zone000)   ; home
 
-  # <<< CC: Pulsar Ready — blocks on DIO in production, no-op in debug
+  # <<< CC: Pulsar Start — wait + operator popup + begin extrusion:
   wait_for_pulsar_enabled(debug_pulsar_ready, pulsar_ready_pin)
-
-  # Existing GH popup — the operator's "click to start" gate
   popup("Press Ready to start your print", title="Operator_Safety", warning=False, error=False, blocking=True)
-
-  # <<< CC: Pulsar Start — begin continuous extrusion
   pulsar_start_extrusion(900, 100)
 
   movej([0.1918, -1.9656, ...], a=3.1416, v=0.3716, r=Zone000)   ; print motion ↓
   movej([...], ...)
-  movej([...], ...)
   ; ... many movej commands ...
   movej([0.2424, -1.9481, ...], a=3.1416, v=0.2829, r=Zone000)   ; last bead point
 
-  # <<< CC: Pulsar End — stop extrusion, cool down, drop ready signal
+  # <<< CC: Pulsar End — stop, cool, popup, close socket:
+  pulsar_flow_off()
+  pulsar_retract(3.0, 600)
   pulsar_stop_extrusion()
   pulsar_cooldown()
-
-  movej([0.1073, -1.5563, ...], a=3.1416, v=0.3532, r=Zone000)   ; return home
-
-  # <<< CC: Pulsar Disconnect — close the socket
+  popup("Job Complete! Please put all the caps back on the pens and tidy up!", title="Job_Done", warning=False, error=False, blocking=True)
   duet_close()
 
-  # Existing GH popup — end message
-  popup("Job Complete! Please put all the caps back on the pens and tidy up!", title="Job_Done", warning=False, error=False, blocking=True)
+  movej([0.1073, -1.5563, ...], a=3.1416, v=0.3532, r=Zone000)   ; return home
 
 end
 Program()
 ```
 
+The operator clicks OK on **Pulsar Start**'s popup → screw begins.
+They click OK on **Pulsar End**'s popup → socket closes → robot
+returns home. No separate `Popup` components needed for the operator
+gates.
+
 ---
 
 ## The components
 
-### 1. Pulsar Setup (mandatory, place at the very start)
+### 1. Pulsar Setup (mandatory — very start)
 
-This is the only component with a Declaration block — it loads every
-helper function the rest of the components rely on, plus the debug-mode
-constants.
+The only component with a Declaration block. Loads every helper and
+all config constants in one shot.
 
 **Name**: `Pulsar Setup`
 **Manufacturer**: `UR`
 
-**Declaration** *(paste as-is — these are the function library)*:
+**Declaration** *(paste as-is)*:
 
 ```
 debug_pulsar_ready = True
@@ -188,7 +185,7 @@ def pulsar_cooldown():
 end
 ```
 
-**Command code** *(connect, clear faults, fire preheat)*:
+**Command code**:
 
 ```
 duet_open("172.22.22.100", 23)
@@ -196,56 +193,49 @@ pulsar_clear_heater_faults()
 pulsar_preheat(190, 215)
 ```
 
-Swap the `190, 215` values from GH inputs so the temps are
-parameterised (PLA = 190/215, PETG = ~220/245).
+Wire `190` and `215` to GH inputs for barrel/nozzle temps.
 
 ---
 
-### 2. Pulsar Ready (mandatory, place just before your "Press Ready" popup)
+### 2. Pulsar Start (mandatory — before first print move)
 
-Holds the script until the Duet's ready DIO goes high. In debug mode
-(`debug_pulsar_ready = True` from Setup), this is a no-op — the
-operator gates the start by waiting to click your "Press Ready" popup.
+Three lines, one component:
 
-**Name**: `Pulsar Ready`
+1. **Wait** for the Pulsar ready signal (no-op in debug, DIO poll in production).
+2. **Operator popup** — final go gate, text parameterised from GH.
+3. **Start the daemon** — screw begins turning once the operator clicks OK.
+
+**Name**: `Pulsar Start`
 **Manufacturer**: `UR`
-**Declaration**: *(empty — Setup already did the work)*
+**Declaration**: *(empty — Setup did the work)*
 
 **Command code**:
 
 ```
 wait_for_pulsar_enabled(debug_pulsar_ready, pulsar_ready_pin)
-```
-
----
-
-### 3. Pulsar Start (mandatory, place after the "Press Ready" popup, before first print move)
-
-Fires the Duet daemon. Once this command executes, the screw is
-turning. Place it **after** the operator popup so the screw doesn't
-start spinning while the operator is still standing next to the
-machine.
-
-**Name**: `Pulsar Start`
-**Manufacturer**: `UR`
-**Declaration**: *(empty)*
-
-**Command code**:
-
-```
+popup("Press Ready to start your print", title="Operator_Safety", warning=False, error=False, blocking=True)
 pulsar_start_extrusion(900, 100)
 ```
 
-`900` is the screw F-value (mm/min). `100` is the initial flow %. Pipe
-these from GH inputs.
+Wire from GH:
+
+| Substitute in | Default in example | Purpose |
+|---|---|---|
+| `Press Ready to start your print` | — | Popup message text |
+| `Operator_Safety` | — | Popup title |
+| `900` | — | Screw F-value (mm/min) |
+| `100` | — | Initial flow % |
 
 ---
 
-### 4. Pulsar End (mandatory, place after the last bead move, before the return-to-home move)
+### 3. Pulsar End (mandatory — after last print move, before any return-home move)
 
-Stops the screw and cools the heaters. Place it at the end of motion
-but BEFORE the move-home travel — you want the bead to stop at the
-last printed point, not while travelling away.
+Stop the bead instantly, retract, clear the daemon flag, kill the
+heaters, prompt the operator, then close the socket. The operator
+clicks OK to acknowledge → socket closes → GH's return-home `movej`
+runs next. Since flow is off and the daemon is stopped, no material
+comes out during the return travel even if a queued chunk is still
+draining.
 
 **Name**: `Pulsar End`
 **Manufacturer**: `UR`
@@ -254,36 +244,30 @@ last printed point, not while travelling away.
 **Command code**:
 
 ```
+pulsar_flow_off()
+pulsar_retract(3.0, 600)
 pulsar_stop_extrusion()
 pulsar_cooldown()
-```
-
----
-
-### 5. Pulsar Disconnect (mandatory, place at the very end, after the "Job Complete" popup)
-
-Closes the socket. Cheap; mostly hygiene.
-
-**Name**: `Pulsar Disconnect`
-**Manufacturer**: `UR`
-**Declaration**: *(empty)*
-
-**Command code**:
-
-```
+popup("Job Complete! Please put all the caps back on the pens and tidy up!", title="Job_Done", warning=False, error=False, blocking=True)
 duet_close()
 ```
 
+Wire from GH:
+
+| Substitute in | Default in example | Purpose |
+|---|---|---|
+| `3.0` | — | Retract distance (mm) |
+| `600` | — | Retract feedrate (mm/min) |
+| `Job Complete!...` | — | Popup message text |
+| `Job_Done` | — | Popup title |
+
 ---
 
-### 6. Pulsar Layer Change — Pre-Travel (optional, place before each travel `movej`)
+## Optional components
 
-Pause the bead and retract before lifting / travelling to the next
-layer start.
+### 4. Pulsar Pre-Travel (before each travel `movej`)
 
-**Name**: `Pulsar Pre-Travel`
-**Manufacturer**: `UR`
-**Declaration**: *(empty)*
+Pause bead and retract.
 
 **Command code**:
 
@@ -292,16 +276,9 @@ pulsar_flow_off()
 pulsar_retract(3.0, 600)
 ```
 
----
+### 5. Pulsar Post-Travel (after each travel `movej`)
 
-### 7. Pulsar Layer Change — Post-Travel (optional, place after each travel `movej`)
-
-Unretract and resume flow once the head is back at the next layer's
-start point.
-
-**Name**: `Pulsar Post-Travel`
-**Manufacturer**: `UR`
-**Declaration**: *(empty)*
+Unretract and resume flow.
 
 **Command code**:
 
@@ -310,17 +287,9 @@ pulsar_unretract(3.0, 600)
 pulsar_flow_on(100)
 ```
 
----
+### 6. Pulsar Flow (anywhere mid-print)
 
-### 8. Pulsar Flow (optional, anywhere mid-print)
-
-Single-line flow tweak, no retract. Use for slowing the bead on
-overhangs or speeding up on infill — purely a multiplier on the
-underlying screw speed.
-
-**Name**: `Pulsar Flow`
-**Manufacturer**: `UR`
-**Declaration**: *(empty)*
+Bump or trim flow %. No retract.
 
 **Command code**:
 
@@ -328,27 +297,20 @@ underlying screw speed.
 pulsar_flow_on(75)
 ```
 
-Pipe the percentage from a GH input.
-
 ---
 
 ## Minimum viable first GH test
 
-For your first print test, you only need **five** components:
+For your first print test, you only need the **three mandatory
+components**: Setup, Start, End. Skip Pre-Travel / Post-Travel / Flow
+until you're doing multi-layer prints with travels.
 
-1. **Pulsar Setup** — at the very start
-2. **Pulsar Ready** — just before "Press Ready" popup
-3. **Pulsar Start** — just after "Press Ready" popup
-4. **Pulsar End** — after the last bead move
-5. **Pulsar Disconnect** — at the very end
-
-Skip the layer-change components until you're doing real multi-layer
-prints with travels. For a single-layer test bead, the screw just runs
-continuously start-to-finish.
+For a single-layer continuous bead, the screw just runs from Pulsar
+Start to Pulsar End. No retracts needed mid-print.
 
 ## Parameterising from Grasshopper
 
-The numbers you'll most likely want hooked to GH inputs:
+Numbers you'll likely want hooked to GH inputs:
 
 | Parameter | Default | Component | Why |
 |---|---|---|---|
@@ -357,13 +319,16 @@ The numbers you'll most likely want hooked to GH inputs:
 | Duet IP | `172.22.22.100` | Setup | Could change per network |
 | `feed` (F-value) | 900 | Start | Volumetric calibration |
 | `flow` initial % | 100 | Start | Bead width tuning |
-| `retract` mm | 3.0 | Pre/Post-Travel | Material-specific |
-| `retract` feed | 600 | Pre/Post-Travel | Material-specific |
+| Start popup text | — | Start | Per-print operator notes |
+| Start popup title | — | Start | Per-print operator notes |
+| `retract` mm | 3.0 | End / Pre/Post-Travel | Material-specific |
+| `retract` feed | 600 | End / Pre/Post-Travel | Material-specific |
+| End popup text | — | End | Per-print operator notes |
+| End popup title | — | End | Per-print operator notes |
 
-The Custom Command's Command code field accepts standard GH string
-interpolation — wire numeric inputs from elsewhere in your definition
-straight into the text and they'll appear as literal numbers in the
-output.
+Strings (popup text, title) need to be quoted in the URScript output
+— same as today. Pipe them in the same way you pipe the numeric
+inputs into the temp / feed fields.
 
 ## Switching to production (DIO wired)
 
@@ -378,3 +343,9 @@ Nothing else changes on the UR side. The Duet's
 `pulsar_signal_ready.g` and `pulsar_signal_clear.g` macros need their
 `M42` lines uncommented with the matching Duet output pin — that's the
 hardware-side switch.
+
+Once production-wired, **Pulsar Start**'s `wait_for_pulsar_enabled`
+call blocks silently until the Duet asserts the ready DIO, and *only
+then* does the popup appear. The operator no longer has to monitor
+DWC; the script gates itself on the wire, then asks the operator to
+acknowledge.

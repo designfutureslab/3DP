@@ -1,9 +1,16 @@
-# Pulsar end-of-print
+# Pulsar end — stop, cool, operator popup, close socket
 #
-# Stops the daemon, sets both heater targets to 0, closes the socket.
-# The robot should already have parked at a safe position before this
-# block runs.
+# This is the "Pulsar End" command code. Paste after the last bead
+# movej, before any return-home travel. Flow stops first so no material
+# extrudes if a queued chunk is still draining; the popup blocks until
+# the operator clicks OK; the socket closes; then GH's return-home
+# movej runs normally.
 
+pulsar_flow_off()
+pulsar_retract(3.0, 600)
 pulsar_stop_extrusion()
 pulsar_cooldown()
+
+popup("Job Complete!", title="Job_Done", warning=False, error=False, blocking=True)
+
 duet_close()

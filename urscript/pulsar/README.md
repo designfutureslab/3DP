@@ -120,21 +120,27 @@ weighing extrudate over a fixed time at flow 100 %.
 
 ## Ready-signal pattern
 
-Preheat is now hardware-gated, not socket-gated. Sequence:
+Preheat is hardware-gated, not socket-gated. Sequence at the start of
+the print:
 
 ```
 pulsar_preheat(190, 215)                # async — Duet handles M116
 wait_for_pulsar_enabled(debug, pin)     # block until Duet→UR DIO goes high
-confirm_start_print()                   # operator-side checkpoint
-pulsar_start_extrusion(900, 100)
+popup("Press Ready to start", ...)      # operator gate (GH-emitted in production)
+pulsar_start_extrusion(900, 100)        # daemon takes over
 ```
 
-While `debug=True`, the wait is a confirmation popup — set this at the
-top of the script. Once the Duet→UR wire is in place, flip to `False`
-and set `pin` to the UR digital input number. The Duet macros
-`pulsar_signal_ready.g` / `pulsar_signal_clear.g` already include the
-hook; you just uncomment their `M42` line with the right pin. See
+In debug mode `wait_for_pulsar_enabled` is a no-op — the operator
+gates by not clicking the downstream popup until DWC shows both zones
+at target. Once the Duet→UR wire is in place, set `debug=False` and
+the wait blocks silently on the DIO before the popup even appears. The
+Duet macros `pulsar_signal_ready.g` / `pulsar_signal_clear.g` already
+include the hook; uncomment their `M42` line with the right pin. See
 `/duet/README.md` for the hardware side.
+
+For Grasshopper-driven prints, the wait + popup + start are all folded
+into a single **Pulsar Start** Custom Command — see
+`grasshopper-integration.md` for the canonical layout.
 
 ## Design rules
 

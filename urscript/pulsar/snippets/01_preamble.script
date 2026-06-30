@@ -1,22 +1,10 @@
-# Pulsar preamble — print start
+# Pulsar preamble — connect + preheat
 #
-# Paste at the top of a Grasshopper-emitted print program, immediately
-# after the lib_pulsar.script function defs. Connects to the Duet,
-# clears heater faults, fires the (async) preheat, then waits for the
-# Duet's ready signal.
-#
-# The "click to start" operator gate is the GH-generated popup further
-# down in the program — we don't fire another popup here.
+# This is the "Pulsar Setup" command code (without the Declaration
+# block — that's a separate file you'd inline at the top of Program()
+# alongside pulsarTcp, etc.). Paste right after set_tcp / set_payload.
 #
 # Temps below are PLA. For PETG try barrel=220, nozzle=245.
-#
-# Set debug_pulsar_ready = True until the Duet→UR ready DIO is wired.
-# In that mode wait_for_pulsar_enabled is a no-op — the operator simply
-# doesn't click the downstream "Press Ready" popup until DWC shows both
-# zones at target. When wired, set to False and use pulsar_ready_pin.
-
-debug_pulsar_ready = True
-pulsar_ready_pin   = 0
 
 duet_open("172.22.22.100", 23)
 
@@ -27,5 +15,3 @@ end
 
 pulsar_clear_heater_faults()
 pulsar_preheat(190, 215)
-wait_for_pulsar_enabled(debug_pulsar_ready, pulsar_ready_pin)
-pulsar_start_extrusion(900, 100)
