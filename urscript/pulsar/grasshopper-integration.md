@@ -85,6 +85,12 @@ all config constants in one shot.
 
 **Declaration** *(paste as-is — pre-indented per the rule above)*:
 
+Note the `duet_send_m98` helper — it builds the `M98 P"filename" …` line
+byte-by-byte using `socket_send_byte(34)` for each `"` character.
+Polyscope 5.11 does NOT honour `\"` as an escape inside URScript string
+literals (parser closes the string early at the first `\"`), so we
+can't embed the quotes with a straight escape sequence.
+
 ```
 debug_pulsar_ready = True
   pulsar_ready_pin   = 0
@@ -100,6 +106,15 @@ debug_pulsar_ready = True
 
   def duet_send_line(line):
     socket_send_line(line, "duet")
+  end
+
+  def duet_send_m98(filename, params):
+    socket_send_string("M98 P", "duet")
+    socket_send_byte(34, "duet")
+    socket_send_string(filename, "duet")
+    socket_send_byte(34, "duet")
+    socket_send_string(params, "duet")
+    socket_send_byte(10, "duet")
   end
 
   def duet_send_line_and_read(line, timeout):
@@ -118,13 +133,12 @@ debug_pulsar_ready = True
   end
 
   def pulsar_clear_heater_faults():
-    duet_send_line("M98 P\"pulsar_clear_faults.g\"")
+    duet_send_m98("pulsar_clear_faults.g", "")
     sleep(0.1)
   end
 
   def pulsar_preheat(barrel, nozzle):
-    cmd = "M98 P\"pulsar_preheat.g\" B" + to_str(barrel) + " N" + to_str(nozzle)
-    duet_send_line(cmd)
+    duet_send_m98("pulsar_preheat.g", " B" + to_str(barrel) + " N" + to_str(nozzle))
   end
 
   def wait_for_pulsar_enabled(debug, pin):
@@ -136,32 +150,31 @@ debug_pulsar_ready = True
   end
 
   def pulsar_start_extrusion(feed, flow):
-    cmd = "M98 P\"pulsar_start.g\" F" + to_str(feed) + " R" + to_str(flow)
-    duet_send_line(cmd)
+    duet_send_m98("pulsar_start.g", " F" + to_str(feed) + " R" + to_str(flow))
   end
 
   def pulsar_flow_on(flow):
-    duet_send_line("M98 P\"pulsar_flow.g\" S" + to_str(flow))
+    duet_send_m98("pulsar_flow.g", " S" + to_str(flow))
   end
 
   def pulsar_flow_off():
-    duet_send_line("M98 P\"pulsar_flow.g\" S0")
+    duet_send_m98("pulsar_flow.g", " S0")
   end
 
   def pulsar_retract(mm, feed):
-    duet_send_line("M98 P\"pulsar_retract.g\" S" + to_str(mm) + " F" + to_str(feed))
+    duet_send_m98("pulsar_retract.g", " S" + to_str(mm) + " F" + to_str(feed))
   end
 
   def pulsar_unretract(mm, feed):
-    duet_send_line("M98 P\"pulsar_unretract.g\" S" + to_str(mm) + " F" + to_str(feed))
+    duet_send_m98("pulsar_unretract.g", " S" + to_str(mm) + " F" + to_str(feed))
   end
 
   def pulsar_stop_extrusion():
-    duet_send_line("M98 P\"pulsar_stop.g\"")
+    duet_send_m98("pulsar_stop.g", "")
   end
 
   def pulsar_cooldown():
-    duet_send_line("M98 P\"pulsar_cooldown.g\"")
+    duet_send_m98("pulsar_cooldown.g", "")
   end
 ```
 

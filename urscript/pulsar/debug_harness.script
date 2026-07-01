@@ -70,6 +70,18 @@ def Program():
     socket_send_line(line, "duet")
   end
 
+  # Polyscope 5.11 doesn't honour \" as an escape for embedded double
+  # quotes; the parser closes the string early. Build M98 lines
+  # byte-by-byte using socket_send_byte(34) for each quote instead.
+  def duet_send_m98(filename, params):
+    socket_send_string("M98 P", "duet")
+    socket_send_byte(34, "duet")
+    socket_send_string(filename, "duet")
+    socket_send_byte(34, "duet")
+    socket_send_string(params, "duet")
+    socket_send_byte(10, "duet")
+  end
+
   def duet_send_line_and_read(line, timeout):
     socket_send_line(line, "duet")
     sleep(0.05)
@@ -80,36 +92,34 @@ def Program():
   # ---------------- PULSAR (M98 wrappers) ----------------
 
   def pulsar_clear_faults():
-    duet_send_line("M98 P\"pulsar_clear_faults.g\"")
+    duet_send_m98("pulsar_clear_faults.g", "")
     sleep(0.1)
   end
 
   # Fire-and-forget — Duet handles the M116 wait, then asserts ready DIO.
   def pulsar_preheat(b, n):
-    cmd = "M98 P\"pulsar_preheat.g\" B" + to_str(b) + " N" + to_str(n)
-    duet_send_line(cmd)
+    duet_send_m98("pulsar_preheat.g", " B" + to_str(b) + " N" + to_str(n))
   end
 
   def pulsar_start(f, pct):
-    cmd = "M98 P\"pulsar_start.g\" F" + to_str(f) + " R" + to_str(pct)
-    duet_send_line(cmd)
+    duet_send_m98("pulsar_start.g", " F" + to_str(f) + " R" + to_str(pct))
   end
 
   def pulsar_flow(value):
-    duet_send_line("M98 P\"pulsar_flow.g\" S" + to_str(value))
+    duet_send_m98("pulsar_flow.g", " S" + to_str(value))
   end
 
   def pulsar_retract(mm, f):
-    duet_send_line("M98 P\"pulsar_retract.g\" S" + to_str(mm) + " F" + to_str(f))
+    duet_send_m98("pulsar_retract.g", " S" + to_str(mm) + " F" + to_str(f))
   end
 
   def pulsar_unretract(mm, f):
-    duet_send_line("M98 P\"pulsar_unretract.g\" S" + to_str(mm) + " F" + to_str(f))
+    duet_send_m98("pulsar_unretract.g", " S" + to_str(mm) + " F" + to_str(f))
   end
 
   def pulsar_stop():
-    duet_send_line("M98 P\"pulsar_stop.g\"")
-    duet_send_line("M98 P\"pulsar_cooldown.g\"")
+    duet_send_m98("pulsar_stop.g", "")
+    duet_send_m98("pulsar_cooldown.g", "")
   end
 
   def pulsar_show_temp():

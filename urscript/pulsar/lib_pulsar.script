@@ -1,5 +1,5 @@
 
-# Pulsar Atom + Duet 3 helper library for UR5 CB3 (URScript / Polyscope 3.x)
+# Pulsar Atom + Duet 3 helper library for UR (CB3 & e-Series URScript)
 #
 # DAEMON ARCHITECTURE — all extrusion state lives on the Duet. This library
 # is now a thin wrapper that fires Duet-side macros via M98. The Duet's
@@ -7,16 +7,18 @@
 # is true, so the UR no longer has to think about move-duration limits or
 # top-up timing.
 #
+# NOTE ON QUOTES — Polyscope's URScript does NOT reliably honour `\"` as
+# an escape for an embedded double-quote inside a string literal
+# (confirmed broken on 5.11.11 — parser fails at the first `\"`). RRF's
+# M98 requires quoted filenames, so we can't just drop the quotes.
+# Workaround: build every "M98 P\"filename\" ..." line byte-by-byte
+# using socket_send_byte(34, ...) for each `"` character. See
+# duet_send_m98() below.
+#
 # Required Duet-side setup (see /duet/ in this repo):
 #   - `0:/sys/daemon.g` and `0:/sys/pulsar_init.g` uploaded
 #   - `M98 P"pulsar_init.g"` added to `config.g`
 #   - All `0:/macros/pulsar_*.g` macros uploaded
-#
-# Use this file one of two ways:
-#   1. Paste the function defs inside a `def Program(): ... end` block on
-#      the teach pendant, then call them in the order you want.
-#   2. Have Grasshopper emit a full program that inlines these defs
-#      verbatim followed by the print's motion + flow commands.
 
 # ---------- low-level Duet I/O ----------
 
@@ -33,7 +35,18 @@ def duet_send_line(line):
   socket_send_line(line, "duet")
 end
 
-# Send + small settle + read. Returns "" on timeout.
+# Build and send an M98 macro call: `M98 P"<filename>"<params>\n`.
+# The quote characters are injected via socket_send_byte(34) to sidestep
+# URScript's inconsistent \" escape handling.
+def duet_send_m98(filename, params):
+  socket_send_string("M98 P", "duet")
+  socket_send_byte(34, "duet")
+  socket_send_string(filename, "duet")
+  socket_send_byte(34, "duet")
+  socket_send_string(params, "duet")
+  socket_send_byte(10, "duet")
+end
+
 def duet_send_line_and_read(line, timeout):
   socket_send_line(line, "duet")
   sleep(0.05)
@@ -41,8 +54,8 @@ def duet_send_line_and_read(line, timeout):
   return resp
 end
 
-# socket_open's return value is unreliable on CB3, so we verify
-# connectivity by sending M115 and checking that any response came back.
+# socket_open's return value is unreliable — verify connectivity by
+# sending M115 and checking a response came back.
 def duet_handshake(timeout):
   resp = duet_send_line_and_read("M115", timeout)
   if (resp != ""):
@@ -54,7 +67,7 @@ end
 # ---------- Pulsar high-level functions ----------
 
 def pulsar_clear_heater_faults():
-  duet_send_line("M98 P\"pulsar_clear_faults.g\"")
+  duet_send_m98("pulsar_clear_faults.g", "")
   sleep(0.1)
 end
 
@@ -67,8 +80,7 @@ end
 # barrel = H0 ("Top"  label) — feed/compression zone
 # nozzle = H1 ("Bottom" label) — metering/exit zone
 def pulsar_preheat(barrel, nozzle):
-  cmd = "M98 P\"pulsar_preheat.g\" B" + to_str(barrel) + " N" + to_str(nozzle)
-  duet_send_line(cmd)
+  duet_send_m98("pulsar_preheat.g", " B" + to_str(barrel) + " N" + to_str(nozzle))
 end
 
 # Block until the Pulsar reports ready.
@@ -91,16 +103,15 @@ end
 # Begin continuous extrusion via the Duet daemon. After this returns, the
 # screw is turning and the daemon will keep the move queue topped up.
 def pulsar_start_extrusion(feed, flow):
-  cmd = "M98 P\"pulsar_start.g\" F" + to_str(feed) + " R" + to_str(flow)
-  duet_send_line(cmd)
+  duet_send_m98("pulsar_start.g", " F" + to_str(feed) + " R" + to_str(flow))
 end
 
 def pulsar_flow_on(flow):
-  duet_send_line("M98 P\"pulsar_flow.g\" S" + to_str(flow))
+  duet_send_m98("pulsar_flow.g", " S" + to_str(flow))
 end
 
 def pulsar_flow_off():
-  duet_send_line("M98 P\"pulsar_flow.g\" S0")
+  duet_send_m98("pulsar_flow.g", " S0")
 end
 
 # Retract / unretract. Use after pulsar_flow_off() and before a UR travel
@@ -108,20 +119,20 @@ end
 # don't sit retracted for more than the chunk duration or the screw will
 # resume pushing material before you've unretracted.
 def pulsar_retract(mm, feed):
-  duet_send_line("M98 P\"pulsar_retract.g\" S" + to_str(mm) + " F" + to_str(feed))
+  duet_send_m98("pulsar_retract.g", " S" + to_str(mm) + " F" + to_str(feed))
 end
 
 def pulsar_unretract(mm, feed):
-  duet_send_line("M98 P\"pulsar_unretract.g\" S" + to_str(mm) + " F" + to_str(feed))
+  duet_send_m98("pulsar_unretract.g", " S" + to_str(mm) + " F" + to_str(feed))
 end
 
 # Stop the screw cleanly. Heaters stay on.
 def pulsar_stop_extrusion():
-  duet_send_line("M98 P\"pulsar_stop.g\"")
+  duet_send_m98("pulsar_stop.g", "")
 end
 
 def pulsar_cooldown():
-  duet_send_line("M98 P\"pulsar_cooldown.g\"")
+  duet_send_m98("pulsar_cooldown.g", "")
 end
 
 # Pop up the current M105 reading. Diagnostic helper.
