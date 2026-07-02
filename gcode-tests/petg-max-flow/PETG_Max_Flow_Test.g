@@ -27,7 +27,8 @@ var emmPerRev    = 0        ; mm E per screw rev (0 = skip RPM readout)
 var mm3PerEmm    = 0        ; mm^3 per mm E (0 = skip volumetric readout)
 ; -----------------------------------------------------------------------------
 
-M291 P{"Heat to " ^ var.nozzleTemp ^ " C, soak " ^ (var.soakSeconds/60) ^ " min, prime, then ladder " ^ var.ladderStart ^ "->" ^ var.ladderMax ^ " mm/min. Pellets dry? Catch tray ready?"} R"PETG Max-Flow Test" S4 K{"Start","Cancel"} T0
+echo "Heat", var.nozzleTemp, "C, soak", (var.soakSeconds/60), "min, prime, ladder", var.ladderStart, "->", var.ladderMax, "mm/min."
+M291 P"Start test? Pellets dry? Catch tray ready?" R"PETG Max-Flow Test" S4 K{"Start","Cancel"} T0
 if input != 0
     echo "Test cancelled."
     M99
