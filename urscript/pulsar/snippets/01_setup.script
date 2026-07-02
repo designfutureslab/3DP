@@ -9,7 +9,7 @@
 duet_open("172.22.22.100", 23)
 
 if (duet_handshake(2.0) == False):
-  popup("ERROR: Duet did not respond to M115. Aborting.")
+  popup("ERROR: Duet did not respond to M115. Aborting.", title="Fatal", warning=False, error=True, blocking=True)
   halt
 end
 

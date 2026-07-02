@@ -20,4 +20,4 @@ if exists(global.pulsar_running) && global.pulsar_running
   G4 S{global.pulsar_dwell}
 else
   G4 S1
-end
+endif

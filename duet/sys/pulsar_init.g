@@ -8,16 +8,16 @@
 
 if !exists(global.pulsar_running)
   global pulsar_running = false
-end
+endif
 
 if !exists(global.pulsar_feed)
   global pulsar_feed = 900
-end
+endif
 
 if !exists(global.pulsar_chunk)
   global pulsar_chunk = 1000
-end
+endif
 
 if !exists(global.pulsar_dwell)
   global pulsar_dwell = 60
-end
+endif

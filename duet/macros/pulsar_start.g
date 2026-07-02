@@ -13,10 +13,10 @@ var feed = 900
 var flow = 100
 if exists(param.F)
   set var.feed = param.F
-end
+endif
 if exists(param.R)
   set var.flow = param.R
-end
+endif
 
 ; Recalculate dwell so the daemon queues a new chunk just before the
 ; current one drains. Dwell = chunk-duration * 0.95, in whole seconds.

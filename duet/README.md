@@ -21,6 +21,7 @@ periodically. Moving the keep-it-spinning logic onto the Duet:
 
 | File | Destination on Duet SD | Purpose |
 |---|---|---|
+| `sys/config.g` | `0:/sys/config.g` | Reference copy of the live Duet config. Includes the `M98 P"pulsar_init.g"` hook. Not auto-deployed — the Duet has its own working copy. |
 | `sys/daemon.g` | `0:/sys/daemon.g` | Background loop. RRF auto-runs while booted. |
 | `sys/pulsar_init.g` | `0:/sys/pulsar_init.g` | Declares the four globals the daemon reads. Called once from `config.g`. |
 | `macros/pulsar_preheat.g` | `0:/macros/pulsar_preheat.g` | Set both zone targets, block until reached. |
@@ -121,6 +122,15 @@ the wire is in.
 On the UR side, `wait_for_pulsar_enabled(debug, pin)` blocks until the
 input goes high. While `debug=True`, it shows a confirmation popup
 instead, so the workflow is fully testable without the wire.
+
+## RRF conditional-block syntax note
+
+All macros use `endif` / `endwhile` (compact form) as the block
+terminator, not bare `end`. RRF 3.6 rejects bare `end` with "Bad
+command: end" — first hit during bench testing was line 11 of
+`pulsar_init.g` (the first `end` after the initial `if !exists(...)`).
+Confirmed working: `endif` and `endwhile`. Do not switch back to
+`end`.
 
 ## Safety
 

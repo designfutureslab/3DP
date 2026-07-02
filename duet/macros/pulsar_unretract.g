@@ -7,9 +7,9 @@ var mm   = 3.0
 var feed = 600
 if exists(param.S)
   set var.mm = param.S
-end
+endif
 if exists(param.F)
   set var.feed = param.F
-end
+endif
 
 G1 E{var.mm} F{var.feed}

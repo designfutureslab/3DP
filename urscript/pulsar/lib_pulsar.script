@@ -135,8 +135,9 @@ def pulsar_cooldown():
   duet_send_m98("pulsar_cooldown.g", "")
 end
 
-# Pop up the current M105 reading. Diagnostic helper.
+# Pop up the current M105 reading. Diagnostic helper. Explicit
+# blocking=True — Polyscope 5's default is non-blocking.
 def pulsar_show_temp():
   resp = duet_send_line_and_read("M105", 2.0)
-  popup("Temp:\n" + resp)
+  popup("Temp:" + resp, title="Debug", warning=False, error=False, blocking=True)
 end

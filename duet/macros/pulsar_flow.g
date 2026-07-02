@@ -9,6 +9,6 @@
 var pct = 100
 if exists(param.S)
   set var.pct = param.S
-end
+endif
 
 M221 S{var.pct}
