@@ -20,8 +20,19 @@ gcode-tests/petg-max-flow/
     ├── 01_Heat_And_Soak.g    <- Stage 1: heat to PETG temp + soak the barrel
     ├── 02_Prime.g            <- Stage 2: fill the melt zone, confirm clean flow
     ├── 03_Flow_Ladder.g      <- Stage 3: the actual max-flow ladder test
-    └── 04_Cooldown.g         <- Stage 4: heaters off
+    ├── 04_Cooldown.g         <- Stage 4: heaters off
+    └── 05_Jog_Extrude.g      <- utility: extrude at a constant speed you type in
 ```
+
+## Constant-speed jog (`05_Jog_Extrude.g`)
+
+After the ladder finds a rough ceiling, use this to sit at a specific speed and
+watch the flow. It pops a numeric-entry dialog (`M291 S6`) for the speed and a
+run time, then extrudes at exactly that speed as one continuous move (no
+segmenting, so the screw holds a true constant speed), and loops so you can
+re-run at a new speed. Enter a big run time for "basically continuous"; cancel
+the running macro in DWC or use the emergency stop to end early. Requires the
+extruder to be hot (run Stage 1 first).
 
 ## The DWC "debug UI" — clicking through the stages
 
