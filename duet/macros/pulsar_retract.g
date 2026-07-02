@@ -4,14 +4,14 @@
 ; e.g.    M98 P"pulsar_retract.g" S3 F600
 ;
 ; Call after pulsar_flow.g S0 and before a travel move.
+;
+; Block terminators: dedent-based.
 
 var mm   = 3.0
 var feed = 600
 if exists(param.S)
   set var.mm = param.S
-endif
 if exists(param.F)
   set var.feed = param.F
-endif
 
 G1 E-{var.mm} F{var.feed}

@@ -13,15 +13,15 @@
 ; setpoints, position 0 = H1 (nozzle), position 1 = H0 (barrel).
 ;
 ; Blocks via M116 until every heater on tool 0 is within tolerance.
+;
+; Block terminators: dedent-based.
 
 var barrel = 190
 var nozzle = 215
 if exists(param.B)
   set var.barrel = param.B
-endif
 if exists(param.N)
   set var.nozzle = param.N
-endif
 
 M568 P0 S{var.nozzle}:{var.barrel} R{var.nozzle}:{var.barrel} A2
 M116 P0

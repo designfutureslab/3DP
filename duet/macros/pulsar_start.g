@@ -6,6 +6,8 @@
 ; After this returns, global.pulsar_running is true and the daemon is
 ; topping up the move queue. Modulate flow at runtime via pulsar_flow.g
 ; (M221). Stop with pulsar_stop.g.
+;
+; Block terminators: dedent-based (see daemon.g).
 
 M98 P"pulsar_init.g"
 
@@ -13,10 +15,8 @@ var feed = 900
 var flow = 100
 if exists(param.F)
   set var.feed = param.F
-endif
 if exists(param.R)
   set var.flow = param.R
-endif
 
 ; Recalculate dwell so the daemon queues a new chunk just before the
 ; current one drains. Dwell = chunk-duration * 0.95, in whole seconds.

@@ -5,10 +5,11 @@
 ;
 ; S0 stops the bead cleanly without halting the screw (the daemon keeps
 ; queueing chunks; M221 S0 just pins the multiplier to zero).
+;
+; Block terminator: dedent-based.
 
 var pct = 100
 if exists(param.S)
   set var.pct = param.S
-endif
 
 M221 S{var.pct}

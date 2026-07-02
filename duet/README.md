@@ -125,12 +125,24 @@ instead, so the workflow is fully testable without the wire.
 
 ## RRF conditional-block syntax note
 
-All macros use `endif` / `endwhile` (compact form) as the block
-terminator, not bare `end`. RRF 3.6 rejects bare `end` with "Bad
-command: end" — first hit during bench testing was line 11 of
-`pulsar_init.g` (the first `end` after the initial `if !exists(...)`).
-Confirmed working: `endif` and `endwhile`. Do not switch back to
-`end`.
+Every `if` / `else` / `while` block in these macros uses **dedent-based
+termination** — no explicit block-terminator keyword at all. The block
+ends when the next line at the same or lower indentation appears (or
+at EOF).
+
+Bench-tested on Ric's Duet (RRF 3.6): both bare `end` and `endif` get
+rejected with "Bad command: X" — RRF parses them as G-code command
+names rather than block terminators. Dedent works reliably. If you're
+authoring a new macro, do NOT introduce `end` / `endif` / `endwhile`.
+
+Structure everything so the next command at column 0 (or a comment)
+follows immediately after the last indented line of the block, e.g.:
+
+```
+if condition
+  action
+next_command_at_col_0
+```
 
 ## Safety
 
