@@ -23,9 +23,11 @@ M586 P2 S1                   ; enable Telnet
 ; ---M906 I30 ; set motor current idle factor
 ; ---M84 S30 ; set motor current idle timeout
 
-; Driver & mapping
-M569 P0.4 S1 D2                 ; driver 0.4 forward, spreadCycle (flip S if reversed)
-M584 E0.4                       ; map extruder to driver 0.4
+; Driver & mapping — extruder is on onboard Drive 1 (driver 0.1) as of
+; the re-wire from an external driver that was on 0.4. Flip S if the
+; screw spins the wrong direction once you confirm motion.
+M569 P0.1 S1 D2                 ; driver 0.1 forward, spreadCycle
+M584 E0.1                       ; map extruder to driver 0.1
 
 ; Microstepping + steps
 M350 E16 I1                     ; 16× + interpolation (Dyze baseline assumes 16×)
@@ -41,10 +43,9 @@ M566 E300                       ; jerk 300 mm/min (5 mm/s)
 M302 P1                         ; allow cold extrusion (remove in production)
 M83                             ; relative extrusion
 
-; --- Remove Duet current control for external driver ---
-; (External driver sets current via its own switches/pot)
-; M906 E...      ; <-- delete/comment this
-; Motor idle current reduction doesn't affect external driver, but harmless:
+; Motor is now on the onboard driver at 0.1, so M906 E<current> above
+; DOES apply — start at 1200 mA (1.2 A RMS), the onboard driver caps
+; around 1.4 A RMS. If the screw stalls under load, push toward 1400.
 M906 I30
 M84 S30
 ; ---; Extruders
