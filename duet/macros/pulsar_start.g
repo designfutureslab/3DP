@@ -9,7 +9,7 @@
 ;
 ; Block terminators: dedent-based (see daemon.g).
 
-M98 P"pulsar_init.g"
+M98 P"0:/sys/pulsar_init.g"
 
 var feed = 900
 var flow = 100

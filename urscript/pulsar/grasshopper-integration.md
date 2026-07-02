@@ -111,6 +111,7 @@ debug_pulsar_ready = True
   def duet_send_m98(filename, params):
     socket_send_string("M98 P", "duet")
     socket_send_byte(34, "duet")
+    socket_send_string("0:/macros/", "duet")
     socket_send_string(filename, "duet")
     socket_send_byte(34, "duet")
     socket_send_string(params, "duet")

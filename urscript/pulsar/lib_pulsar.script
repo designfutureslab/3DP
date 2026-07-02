@@ -35,12 +35,18 @@ def duet_send_line(line):
   socket_send_line(line, "duet")
 end
 
-# Build and send an M98 macro call: `M98 P"<filename>"<params>\n`.
-# The quote characters are injected via socket_send_byte(34) to sidestep
-# URScript's inconsistent \" escape handling.
+# Build and send an M98 macro call:  M98 P"0:/macros/<filename>"<params>\n
+#
+# Uses an absolute path because Ric's RRF 3.6 doesn't auto-search
+# 0:/macros/ from the console — only 0:/sys/ is on the default path.
+# Absolute paths sidestep the ambiguity everywhere.
+#
+# Quote characters go through socket_send_byte(34) because URScript's
+# \" escape isn't honoured on Polyscope 5.11.
 def duet_send_m98(filename, params):
   socket_send_string("M98 P", "duet")
   socket_send_byte(34, "duet")
+  socket_send_string("0:/macros/", "duet")
   socket_send_string(filename, "duet")
   socket_send_byte(34, "duet")
   socket_send_string(params, "duet")

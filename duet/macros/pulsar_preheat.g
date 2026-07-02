@@ -27,5 +27,6 @@ M568 P0 S{var.nozzle}:{var.barrel} R{var.nozzle}:{var.barrel} A2
 M116 P0
 
 ; Signal the UR that we're at temp. Will no-op until the DIO line is
-; wired and the M42 in pulsar_signal_ready.g is uncommented.
-M98 P"pulsar_signal_ready.g"
+; wired and the M42 in pulsar_signal_ready.g is uncommented. Absolute
+; path because RRF 3.6 on this Duet doesn't auto-search /macros/.
+M98 P"0:/macros/pulsar_signal_ready.g"
