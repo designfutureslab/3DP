@@ -1,17 +1,19 @@
-; PETG_Max_Flow_Test.g
+; Standalone_Max_Flow_Test.g
 ; =============================================================================
-; Self-contained, single-file version of the PETG pellet MAX-FLOW test for the
-; DYZE Pulsar Atom. Run it straight from DWC (upload to 0:/gcodes/ and "Start",
-; or drop in 0:/macros/ and press the button). It heats, soaks, primes, then
-; walks a rising extrusion-speed ladder, pausing at each rung to ask (via a DWC
-; dialog) whether the screw kept up. When you report a stall it records the last
-; good speed and cools down.
+; Self-contained, single-file version of the MAX-FLOW test for the DYZE Pulsar
+; Atom. Run it straight from DWC (upload to 0:/gcodes/ and "Start", or drop in
+; 0:/macros/ and press the button). It heats, soaks, primes, then walks a rising
+; extrusion-speed ladder, pausing at each rung to ask (via a DWC dialog) whether
+; the screw kept up. When you report a stall it records the last good speed and
+; cools down.
 ;
-; Prefer clicking through the stages one at a time? Use the split macros in the
-; ./macros folder instead (00_Config .. 04_Cooldown).
+; This standalone only finds the MAX. For the full workflow -- min rate and
+; dynamic flow calibration -- use the split macros in ./macros (00_Config ..
+; 07_Dynamic_Flow_Calibration), which is the primary, material-generic path.
 ;
-; !! DRY THE PELLETS -- PETG is hygroscopic. Wet pellets sputter and read as a
-;    false stall. Keep a container ready to catch the purge.
+; Defaults below are PETG; change them for other materials (see
+; MATERIAL_TEMPERATURES.md). !! DRY HYGROSCOPIC PELLETS -- wet material sputters
+; and reads as a false stall. Keep a container ready to catch the purge.
 ; =============================================================================
 
 ; ---------------------------- EDIT YOUR VALUES -------------------------------

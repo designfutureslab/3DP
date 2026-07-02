@@ -2,7 +2,7 @@
 ; -----------------------------------------------------------------------------
 ; Constant-speed extrusion jog. Prompts for a speed (and a run time) and extrudes
 ; at that exact speed continuously, so you can dial in / watch flow around the
-; ~600 mm/min ceiling the ladder found. Loops so you can re-run at a new speed
+; ceiling the ladder found. Loops so you can re-run at a new speed
 ; without restarting the macro.
 ;
 ; Runs as ONE continuous move per run (no segmenting) so the screw holds a true
@@ -14,12 +14,12 @@
 ; Requires the extruder to be hot (run Stage 1 first).
 ; -----------------------------------------------------------------------------
 
-if !exists(global.petgCfgLoaded)
+if !exists(global.matCfgLoaded)
     M98 P"00_Config.g"                    ; for the hot-check target + optional mm^3 readout
 
 var target = 235
-if exists(global.petgNozzleTemp)
-    set var.target = global.petgNozzleTemp
+if exists(global.matNozzleTemp)
+    set var.target = global.matNozzleTemp
 
 if heat.heaters[0].current < (var.target - 10)
     M291 P{"Nozzle only " ^ heat.heaters[0].current ^ " C. Run Stage 1 (Heat & Soak) first."} R"Jog Extrude - not hot" S1 T0
@@ -39,9 +39,9 @@ while var.again
     M203 E{var.speed * 2}                 ; make sure the E speed limit won't clamp us (persists until config reload/reboot)
 
     echo "Jog: extruding at", var.speed, "mm/min for", var.secs, "s."
-    if exists(global.petgMm3PerEmm)
-        if global.petgMm3PerEmm > 0
-            echo "     ~", (var.speed / 60) * global.petgMm3PerEmm, "mm^3/s"
+    if exists(global.matMm3PerEmm)
+        if global.matMm3PerEmm > 0
+            echo "     ~", (var.speed / 60) * global.matMm3PerEmm, "mm^3/s"
 
     M117 {"Jog " ^ var.speed ^ " mm/min (" ^ var.secs ^ "s)"}
     G1 E{var.speed * var.secs / 60} F{var.speed}
