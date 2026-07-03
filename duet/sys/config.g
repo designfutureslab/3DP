@@ -86,17 +86,30 @@ M950 F1 C"out6" ; create fan #1
 M106 P1 S1 L0 X1 B0.1 ; configure fan #1
 
 ; Tools
-; H0/H1 deliberately NOT listed here (no H<list> param). Confirmed on
-; hardware via M409 K"heat.heaters": when a heater belongs to a tool,
-; any scalar-S command that touches it (G10, M104, M568 — doesn't
-; matter which) routes through the tool and broadcasts that one S value
-; to every heater the tool owns, silently overwriting the other zone's
-; target. Keeping the tool heater-less makes H0/H1 "free" heaters that
-; M104 H0/H104 H1 and M116 H0/M116 H1 in pulsar_preheat.g can address
-; independently, with no tool in the path to collapse them.
-M563 P0 S"Pulsar" D0 F0:1 ; create tool #0 — drive + fans only, no heaters
-M104 H0 S-273.1 ; ensure barrel heater starts off
-M104 H1 S-273.1 ; ensure nozzle heater starts off
+;
+; Two bugs, two fixes, in order:
+; 1. H0/H1 both listed under one tool's H<list> (`H1:0`) — any scalar-S
+;    command that touched either heater (G10, M568, even bare M104 Hn)
+;    routed through the tool and broadcast that one S to every heater
+;    the tool owned. Confirmed via M409 K"heat.heaters".
+; 2. Took H0/H1 off the tool entirely so nothing could broadcast — but
+;    then M104 H0/M104 H1 accepted with no error and did nothing; the
+;    DWC Tools row showed the heater as "n/a" and neither zone heated.
+;    Heaters that belong to no tool never enter the "active" state on
+;    this firmware.
+;
+; Fix: give each zone its OWN single-heater tool. Tool 0 keeps the
+; extruder drive + fans for extrusion (T0, unrelated to heating). Tools
+; 1 and 2 exist purely so RRF has a tool to drive each heater's active
+; state through — since each owns exactly one heater, there's nothing
+; for a scalar S to broadcast across. Addressed via G10 P1/P2, which
+; works without ever T-selecting tool 1 or 2 (same pattern multi-nozzle
+; RRF machines use to preheat a tool that isn't currently active).
+M563 P0 S"Pulsar" D0 F0:1  ; drive + fans — extrusion only, no heaters
+M563 P1 S"Barrel" H0      ; owns H0 (Top) only
+M563 P2 S"Nozzle" H1      ; owns H1 (Bottom) only
+G10 P1 S-273.1 R-273.1 ; ensure barrel heater starts off
+G10 P2 S-273.1 R-273.1 ; ensure nozzle heater starts off
 M302 P1                        ; allow extrusion regardless of temperature
 
 M584                         ; no axes defined

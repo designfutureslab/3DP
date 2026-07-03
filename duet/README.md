@@ -24,13 +24,13 @@ periodically. Moving the keep-it-spinning logic onto the Duet:
 | `sys/config.g` | `0:/sys/config.g` | Reference copy of the live Duet config. Includes the `M98 P"pulsar_init.g"` hook. Not auto-deployed — the Duet has its own working copy. |
 | `sys/daemon.g` | `0:/sys/daemon.g` | Background loop. RRF auto-runs while booted. |
 | `sys/pulsar_init.g` | `0:/sys/pulsar_init.g` | Declares the four globals the daemon reads. Called once from `config.g`. |
-| `macros/pulsar_preheat.g` | `0:/macros/pulsar_preheat.g` | Set both zone targets directly via `M104 H0 S<barrel> `/ `M104 H1 S<nozzle>`, block until reached with `M116 H0` / `M116 H1`. Echoes the parsed temps to the console. See "Heaters are not tool members" below for why. |
+| `macros/pulsar_preheat.g` | `0:/macros/pulsar_preheat.g` | Set both zone targets via `G10 P1 S<barrel>` / `G10 P2 S<nozzle>` (each zone's own single-heater tool), block until reached with `M116 P1` / `M116 P2`. Echoes the parsed temps to the console. See "Why each heater has its own tool" below for why. |
 | `macros/pulsar_start.g` | `0:/macros/pulsar_start.g` | Begin continuous extrusion. Sets `pulsar_running = true`. |
 | `macros/pulsar_stop.g` | `0:/macros/pulsar_stop.g` | Clear `pulsar_running`, zero flow, release motor. |
 | `macros/pulsar_flow.g` | `0:/macros/pulsar_flow.g` | `M221 S<percent>` — modulate flow without stopping the screw. |
 | `macros/pulsar_retract.g` | `0:/macros/pulsar_retract.g` | Relative-E retract. |
 | `macros/pulsar_unretract.g` | `0:/macros/pulsar_unretract.g` | Relative-E unretract. |
-| `macros/pulsar_cooldown.g` | `0:/macros/pulsar_cooldown.g` | Both zone heaters off (`M104 H0/H1 S-273.1`). |
+| `macros/pulsar_cooldown.g` | `0:/macros/pulsar_cooldown.g` | Both zone heaters off (`G10 P1/P2 S-273.1`). |
 | `macros/pulsar_clear_faults.g` | `0:/macros/pulsar_clear_faults.g` | `M562` on both heaters. |
 | `macros/pulsar_signal_ready.g` | `0:/macros/pulsar_signal_ready.g` | Assert the Duet→UR "ready" DIO. Called automatically from `pulsar_preheat.g`. **Placeholder — uncomment the `M42` line once the wire is in place.** |
 | `macros/pulsar_signal_clear.g` | `0:/macros/pulsar_signal_clear.g` | Drop the Duet→UR "ready" DIO. Called automatically from `pulsar_stop.g` and `pulsar_cooldown.g`. Same `M42` placeholder. |
@@ -54,25 +54,35 @@ periodically. Moving the keep-it-spinning logic onto the Duet:
    - DWC's "Object Model" pane should show the daemon ticking (sleeping
      in its idle branch).
 
-## Heaters are not tool members
+## Why each heater has its own tool
 
-`M563 P0 ...` deliberately has no `H<list>` parameter — tool 0 owns the
-extruder drive (`D0`) and fans (`F0:1`) but no heaters.
+Three attempts, in order, all confirmed on hardware:
 
-Confirmed on hardware via `M409 K"heat.heaters"`: when a heater *is*
-listed under a tool's `H` param, any command that sets its temperature
-with a single scalar `S` — `G10 P0 S<n>`, `M568 P0 S<n>`, even
-`M104 H<n> S<n>` — gets routed through the tool and broadcasts that one
-value to *every* heater the tool owns, silently overwriting the other
-zone's target. This reproduced with two back-to-back bare `M104 H0 S150`
-/ `M104 H1 S170` commands (no macro, no colon-list): both heaters ended
-up at 170. A `G10 ...:...` colon-list was tried first and had the same
-symptom, one value winning over the other.
+1. **Both heaters under tool 0's `H` list** (`M563 P0 ... H1:0`). Any
+   command that set temperature with a single scalar `S` — `G10 P0 S<n>`,
+   `M568 P0 S<n>`, even bare `M104 H<n> S<n>` — got routed through the
+   tool and broadcast that one value to *every* heater the tool owned,
+   silently overwriting the other zone's target. Reproduced with two
+   back-to-back bare `M104 H0 S150` / `M104 H1 S170` commands (no macro,
+   no colon-list): both heaters ended up at 170. Verified via
+   `M409 K"heat.heaters"`.
+2. **Heaters removed from any tool**, addressed via bare `M104 H0` /
+   `M104 H1`. Commands were accepted with no error, but the DWC Tools
+   panel showed the heater as `n/a` and neither zone actually heated —
+   heaters that belong to no tool don't enter the "active" state on this
+   firmware.
+3. **Each heater gets its own single-heater tool** (current approach):
+   tool 0 owns the extruder drive (`D0`) and fans (`F0:1`) only; tool 1
+   owns just `H0` (barrel); tool 2 owns just `H1` (nozzle). `G10 P1 S<n>`
+   / `G10 P2 S<n>` set each zone without ever needing to `T`-select tool
+   1 or 2 — the same pattern multi-nozzle RRF machines use to preheat a
+   tool that isn't currently active. Because each tool owns exactly one
+   heater, there's nothing for a scalar `S` to broadcast across, and
+   because the heater *is* tool-owned, it activates the same way it did
+   in attempt 1.
 
-Keeping the heaters off the tool makes them "free" heaters that
-`M104 H0` / `M104 H1` and `M116 H0` / `M116 H1` address independently,
-with no tool in the path to collapse them. If you ever add `H0:1` back
-to the `M563` line, this bug comes back.
+If you ever merge `H0` and `H1` back onto one tool to "simplify," attempt
+1's bug comes back.
 
 ## Daemon globals
 

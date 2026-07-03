@@ -171,7 +171,7 @@ operator popup + start are in **Pulsar Start** — see
 | `echo global.pulsar_running` returns nothing | `pulsar_init.g` not called from `config.g` | Add `M98 P"pulsar_init.g"` to `config.g` and reboot. |
 | Robot reaches preheat but Pulsar doesn't heat | Heater fault latched | Call `pulsar_clear_heater_faults()` before `pulsar_preheat()`. |
 | `pulsar_preheat()` pops the 15-min timeout warning | Heater hardware fault, thermistor disconnected, or M116 not reaching tolerance | Check Duet web UI; clear faults; verify wiring; check `M116` tolerance in RRF. |
-| Preheat sets both zones to the same (usually the nozzle) temperature | RRF's `M568 S<a>:<b>` colon-list drops the second value when built from expression substitution | Already fixed in `pulsar_preheat.g` — it assigns `tools[0].active[i]` / `standby[i]` per index instead of using the colon-list. If you see this again, check the macro hasn't reverted. |
+| Preheat sets both zones to the same temperature | A heater that belongs to a multi-heater tool broadcasts any scalar-`S` command to every heater the tool owns (confirmed with `G10`, `M568`, and bare `M104 H<n>` — see `duet/README.md` "Why each heater has its own tool") | Fixed by giving each zone its own single-heater tool (tool 1 = barrel/`H0`, tool 2 = nozzle/`H1`); `pulsar_preheat.g` uses `G10 P1` / `G10 P2`. If you see this again, check nobody merged the heaters back onto one tool. |
 | One zone overshoots target by >10 °C while the other holds | PID untuned for that heater, or thermistor / heater wiring swapped | Run `M303 H<n> S<target>` with the barrel empty. Verify each `Hn` drives the right physical zone via isolation test (see commit history). |
 | Screw stalls briefly every minute | `pulsar_dwell` too long | From DWC console: `set global.pulsar_dwell = <smaller>`. Recover stable value, then update the default in `pulsar_init.g`. |
 | "Move duration too long" reappears | `pulsar_chunk` too large for current feed | Lower `global.pulsar_chunk` (default 1000 should be safe for F up to ~9000). |
@@ -191,10 +191,11 @@ operator popup + start are in **Pulsar Start** — see
 
 ## RepRapFirmware notes
 
-- The tool definition `M563 P0 D0 H1:0` means tool 0's heaters are
-  ordered `[H1, H0]`. Position 0 in the colon-list is H1 (nozzle);
-  position 1 is H0 (barrel). `pulsar_preheat.g` knows this and
-  constructs `M568` accordingly.
+- Each heater has its own tool — tool 0 (drive `D0` + fans, no heaters),
+  tool 1 (`H0`, barrel), tool 2 (`H1`, nozzle). `pulsar_preheat.g`
+  addresses them with `G10 P1` / `G10 P2`, which doesn't require
+  T-selecting tool 1 or 2 first. See `duet/README.md` for why they
+  aren't both under tool 0.
 - After the cs1↔cs2 swap in `M308`, H0 is the **Top / barrel / feed**
   zone and H1 is the **Bottom / nozzle / metering** zone.
 - `M221 S0` is "no flow" — the daemon keeps queueing chunks, the
