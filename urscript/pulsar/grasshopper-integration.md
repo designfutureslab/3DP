@@ -42,8 +42,9 @@ the exception — leave it with no leading spaces, GH will indent it.
 All the code blocks below are already pre-indented to this rule.
 Paste them in as-is.
 
-Four mandatory components cover any print; four more are optional for
-mid-print pauses, layer-change retraction, and flow trim. The
+Four mandatory components cover any print (and are all vase mode needs);
+four more are optional for mid-print pauses, layer changes / travels,
+and live rate changes. The
 operator-facing popups ("Press Ready", "Job Complete", "Pause") live
 inside the components that fire at those moments — text and title are
 parameterised from GH inputs the same way the temps and feeds are.
@@ -63,22 +64,20 @@ def Program():
   Speed000 = 0.1
   Zone000 = 0.001
 
-  # <<< CC: Pulsar Setup — Declaration block (defs + flags)
-  # <<< CC: Pulsar Setup — Command code (connect + preheat, BLOCKING —
-  #     this step doesn't return until the Duet confirms both zones
-  #     are at temp, so the next line of the program only runs once
-  #     preheat genuinely finishes)
+  # <<< CC: Pulsar Setup — Declaration block (defs)
+  # <<< CC: Pulsar Setup — Command code (connect + handshake, NON-blocking;
+  #     preheat + purge were done beforehand by preheat_purge.script)
 
   set_tcp(pulsarTcp)
   set_payload(pulsarWeight, pulsarCog)
   movej([0.1073, -1.5563, ...], a=3.1416, v=0.3142, r=Zone000)   ; home
 
   # <<< CC: Pulsar Start — popup + begin extrusion
-  movej([0.1918, -1.9656, ...], a=3.1416, v=0.3716, r=Zone000)   ; print motion ↓
-  ; ... many movej commands ...
-  movej([0.2424, -1.9481, ...], a=3.1416, v=0.2829, r=Zone000)   ; last bead point
+  movel(...)                                                     ; spiral motion ↓
+  ; ... one continuous vase-mode spiral (movel/movej), Z rising ...
+  movel(...)                                                     ; last bead point
 
-  # <<< CC: Pulsar Stop — flow off + retract + stop daemon + cooldown
+  # <<< CC: Pulsar Stop — pause screw + stop daemon + cooldown
   movej([0.1073, -1.5563, ...], a=3.1416, v=0.3532, r=Zone000)   ; return home
 
   # <<< CC: Pulsar End — popup + close socket
@@ -87,10 +86,12 @@ end
 Program()
 ```
 
-Pulsar Stop fires **before** the return-home `movej`, so the bead is
-already off and the daemon has stopped queueing chunks during the
-travel. Pulsar End fires **after**, so the operator sees the
-"complete" popup once the robot is safely parked.
+For **vase mode** this is the whole story: the screw starts at Pulsar
+Start and runs uninterrupted through the single continuous spiral until
+Pulsar Stop — no layer-change or travel components needed. Pulsar Stop
+fires **before** the return-home `movej`, so the screw is already
+stopped during the travel home. Pulsar End fires **after**, so the
+operator sees the "complete" popup once the robot is safely parked.
 
 ---
 
@@ -112,15 +113,18 @@ Polyscope 5.11 does NOT honour `\"` as an escape inside URScript string
 literals (parser closes the string early at the first `\"`), so we
 can't embed the quotes with a straight escape sequence.
 
-There's a second variant, `duet_send_m98_and_read`, used only by
-`pulsar_preheat`. RRF doesn't send its Telnet "ok" reply until the
-whole macro file — including any blocking command inside it, like
-`pulsar_preheat.g`'s `M116` — has finished. So blocking on that socket
-read is how `pulsar_preheat()` waits for both zones to genuinely reach
-temperature, with no polling and no operator judgement call about
-whether DWC "looks close enough". Timeout is 15 minutes; if it fires,
-something is actually wrong (heater fault, thermistor fault, etc.) and
-`pulsar_preheat()` pops a warning.
+This block is a **complete, self-contained copy** of the helper library
+(`lib_pulsar.script`). The live print program only calls the
+non-blocking ones — `pulsar_start_extrusion`, `pulsar_set_rate`,
+`pulsar_pause`, `pulsar_resume`, `pulsar_stop_extrusion`,
+`pulsar_cooldown`, plus `duet_handshake` / `pulsar_show_temp` /
+`pulsar_clear_heater_faults` in Setup. The blocking ones
+(`duet_send_m98_and_read`, `pulsar_preheat`) and the
+`wait_for_pulsar_enabled` stub are included for parity but are **not
+used here** — preheat + purge run once beforehand in the separate
+`preheat_purge.script`. Leaving them defined is harmless (URScript
+just registers the functions) and means you can wire an optional
+component later without editing the Declaration. Paste the whole block.
 
 ```
 debug_pulsar_ready = True
@@ -251,12 +255,18 @@ duet_open("172.22.22.100", 23)
     popup("ERROR: Duet did not respond. Run preheat_purge first. Aborting.", title="Fatal", warning=False, error=True, blocking=True)
     halt
   end
+  pulsar_clear_heater_faults()
+  pulsar_show_temp()
 ```
 
 Setup **no longer preheats** — the operator runs `preheat_purge.script`
 once beforehand, so both zones are already at temp and the screw is
-primed. Setup just opens the socket and does a quick handshake so an
-unreachable Duet fails loud instead of silently. Nothing here blocks.
+primed. Setup opens the socket, fails loud if the Duet is unreachable,
+clears any latched heater fault, and pops the current `M105` reading so
+the operator can eyeball that the zones really are at 215/245 before
+starting. The `M105` read has a 2 s timeout — none of this blocks the
+program for more than a moment. (Drop `pulsar_show_temp()` if you don't
+want the extra popup on the demo floor.)
 
 ---
 
@@ -293,9 +303,9 @@ future Duet→UR safety signal is wired up.
 
 ### 3. Pulsar Stop (after last print move, BEFORE the return-home `movej`)
 
-Stops the bead instantly, retracts, clears the daemon flag, kills the
-heaters. No popup — the robot can travel home with the extruder
-already shut down.
+Halts the screw, clears the daemon flag, releases the motor, kills the
+heaters. No retract (inert on a screw), no popup — the robot can travel
+home with the extruder already shut down.
 
 **Name**: `Pulsar Stop`
 **Manufacturer**: `UR`
@@ -390,15 +400,26 @@ pulsar_set_rate(450)
 
 ---
 
-## Minimum viable first GH test
+## Minimum viable first GH test (vase mode)
 
-Build the four mandatory components: **Setup, Start, Stop, End**. Skip
-everything else until you're doing multi-layer prints with travels or
-need a scripted pause.
+Build only the four mandatory components: **Setup, Start, Stop, End**.
+Vase mode is the ideal first demo because it's a **single continuous
+spiral** — the screw runs uninterrupted from Pulsar Start to Pulsar
+Stop, so none of the timing-sensitive components (Pause, Layer-Change,
+Travel, Flow) are involved and daemon latency is irrelevant.
 
-For a single-layer continuous bead, the screw runs uninterrupted from
-Pulsar Start to Pulsar Stop. Then the robot returns home. Then Pulsar
-End fires the operator popup and closes the socket.
+Order of operations end to end:
+
+1. Run `preheat_purge.script` on the pendant, once. Wait for "Ready".
+2. Run the GH-generated program: **Setup** connects + confirms temp →
+   home → **Start** (operator Ready popup, screw on) → the spiral →
+   **Stop** (screw off) → return home → **End** (done popup, socket
+   closed).
+
+Tune the bead with a single number — `pulsar_start_extrusion(<feed>)`
+in Start — against your spiral's XY speed and layer height. If you want
+to change rate mid-spiral later, add a **Flow** component
+(`pulsar_set_rate`), but you don't need it for a first vase.
 
 ## Parameterising from Grasshopper
 
@@ -437,6 +458,8 @@ duet_open("172.22.22.100", 23)
     popup("ERROR: Duet did not respond. Run preheat_purge first. Aborting.", title="Fatal", warning=False, error=True, blocking=True)
     halt
   end
+  pulsar_clear_heater_faults()
+  pulsar_show_temp()
 ```
 
 ### Start — Command code
