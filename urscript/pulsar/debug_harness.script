@@ -1,4 +1,4 @@
-# Pulsar Atom + Duet 3 — UR e-Series debug harness (daemon + DIO gate)
+# Pulsar Atom + Duet 3 — UR e-Series debug harness (daemon architecture)
 #
 # Standalone, fully-formed URScript program. Paste into a Script Code
 # node on the pendant (File / multi-line mode). Run once through the
@@ -8,21 +8,25 @@
 # ARCHITECTURE
 #   - All extrusion state lives on the Duet (sys/daemon.g + macros).
 #   - UR fires Duet macros via M98 over Telnet.
+#   - Preheat is BLOCKING: pulsar_preheat() waits on the socket reply,
+#     which the Duet only sends once pulsar_preheat.g's internal M116
+#     has finished (i.e. both heaters are genuinely at temp). No
+#     manual "check DWC yourself" step, no polling loop.
 #   - Every popup() call is blocking=True — Polyscope 5's default is
 #     NON-blocking, so the shorthand `popup("...")` on its own does not
 #     block. This is a common footgun coming from CB3.
-#   - Every M98 line goes through duet_send_m98(), which builds the
-#     "M98 P<quote>filename<quote> params\n" byte sequence using
-#     socket_send_byte(34) for each quote — Polyscope 5.11 does not
-#     honour \" as an escape inside a string literal.
+#   - Every M98 line goes through duet_send_m98() / duet_send_m98_and_read(),
+#     which build the "M98 P<quote>filename<quote> params\n" byte
+#     sequence using socket_send_byte(34) for each quote — Polyscope
+#     5.11 does not honour \" as an escape inside a string literal.
 #
 # DUET-SIDE SETUP REQUIRED (see /duet/ in this repo):
 #   - Upload `0:/sys/daemon.g` and `0:/sys/pulsar_init.g` from the repo.
 #   - Upload every `0:/macros/pulsar_*.g` file. Verify via DWC → Macros
 #     tab that all nine appear before running this harness.
 #   - Add `M98 P"pulsar_init.g"` to config.g and reboot the Duet.
-#   - Block terminators in the Duet macros are `endif` / `endwhile`
-#     — bare `end` is rejected by RRF 3.6 with "Bad command: end".
+#   - Block terminators in the Duet macros are dedent-based — RRF 3.6
+#     rejects both bare `end` and `endif` with "Bad command: X".
 
 def Program():
 
@@ -39,9 +43,6 @@ def Program():
 
   retract_mm = 3.0
   retract_feed = 600
-
-  debug_mode = True
-  ready_pin = 0
 
   # ---------------- HELPERS ----------------
 
@@ -75,6 +76,22 @@ def Program():
     return resp
   end
 
+  # Same as duet_send_m98 but blocks for a reply. RRF only sends "ok"
+  # once the whole macro — including any blocking command inside it —
+  # has finished. That's how pulsar_preheat() blocks without polling.
+  def duet_send_m98_and_read(filename, params, timeout):
+    socket_send_string("M98 P", "duet")
+    socket_send_byte(34, "duet")
+    socket_send_string("0:/macros/", "duet")
+    socket_send_string(filename, "duet")
+    socket_send_byte(34, "duet")
+    socket_send_string(params, "duet")
+    socket_send_byte(10, "duet")
+    sleep(0.05)
+    resp = socket_read_string("duet", "", "", False, timeout)
+    return resp
+  end
+
   # ---------------- PULSAR (M98 wrappers) ----------------
 
   def pulsar_clear_faults():
@@ -82,8 +99,14 @@ def Program():
     sleep(0.1)
   end
 
+  # Blocks until both zones are at temp (Duet-side M116). 15 min
+  # timeout — if that fires, something is actually wrong.
   def pulsar_preheat(b, n):
-    duet_send_m98("pulsar_preheat.g", " B" + to_str(b) + " N" + to_str(n))
+    resp = duet_send_m98_and_read("pulsar_preheat.g", " B" + to_str(b) + " N" + to_str(n), 900.0)
+    if (resp == ""):
+      popup("WARNING: preheat timed out waiting for the Duet. Check heaters, thermistors and M570 config.", title="Debug", warning=True, error=False, blocking=True)
+    end
+    return resp
   end
 
   def pulsar_start(f, pct):
@@ -112,14 +135,6 @@ def Program():
     popup("Temp:" + resp, title="Debug", warning=False, error=False, blocking=True)
   end
 
-  def wait_for_ready(dbg, pin):
-    if (dbg == False):
-      while (get_standard_digital_in(pin) == False):
-        sleep(0.5)
-      end
-    end
-  end
-
   # ---------------- EXECUTION ----------------
 
   popup("1/11  Connect to Duet at " + ip, title="Debug", warning=False, error=False, blocking=True)
@@ -137,11 +152,11 @@ def Program():
   popup("4/11  Show temps before preheat", title="Debug", warning=False, error=False, blocking=True)
   pulsar_show_temp()
 
-  popup("5/11  Request preheat (async) to barrel=" + to_str(barrel) + " nozzle=" + to_str(nozzle), title="Debug", warning=False, error=False, blocking=True)
+  popup("5/11  Preheat (BLOCKING) to barrel=" + to_str(barrel) + " nozzle=" + to_str(nozzle) + ". This can take several minutes from cold — the next popup won't appear until the Duet confirms both zones are at temp.", title="Debug", warning=False, error=False, blocking=True)
   pulsar_preheat(barrel, nozzle)
 
-  popup("6/11  MANUAL HOLD: verify both zones at target in DWC. Click OK to start the print.", title="Debug", warning=False, error=False, blocking=True)
-  wait_for_ready(debug_mode, ready_pin)
+  popup("6/11  Preheat complete — reported temps:", title="Debug", warning=False, error=False, blocking=True)
+  pulsar_show_temp()
 
   popup("7/11  Start extrusion — daemon takes over (feed=" + to_str(feed) + " flow=" + to_str(flow) + ")", title="Debug", warning=False, error=False, blocking=True)
   pulsar_start(feed, flow)

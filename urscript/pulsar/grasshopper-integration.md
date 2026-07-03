@@ -46,13 +46,16 @@ def Program():
   Zone000 = 0.001
 
   # <<< CC: Pulsar Setup — Declaration block (defs + flags)
-  # <<< CC: Pulsar Setup — Command code (connect + preheat)
+  # <<< CC: Pulsar Setup — Command code (connect + preheat, BLOCKING —
+  #     this step doesn't return until the Duet confirms both zones
+  #     are at temp, so the next line of the program only runs once
+  #     preheat genuinely finishes)
 
   set_tcp(pulsarTcp)
   set_payload(pulsarWeight, pulsarCog)
   movej([0.1073, -1.5563, ...], a=3.1416, v=0.3142, r=Zone000)   ; home
 
-  # <<< CC: Pulsar Start — wait + popup + begin extrusion
+  # <<< CC: Pulsar Start — popup + begin extrusion
   movej([0.1918, -1.9656, ...], a=3.1416, v=0.3716, r=Zone000)   ; print motion ↓
   ; ... many movej commands ...
   movej([0.2424, -1.9481, ...], a=3.1416, v=0.2829, r=Zone000)   ; last bead point
@@ -91,6 +94,16 @@ Polyscope 5.11 does NOT honour `\"` as an escape inside URScript string
 literals (parser closes the string early at the first `\"`), so we
 can't embed the quotes with a straight escape sequence.
 
+There's a second variant, `duet_send_m98_and_read`, used only by
+`pulsar_preheat`. RRF doesn't send its Telnet "ok" reply until the
+whole macro file — including any blocking command inside it, like
+`pulsar_preheat.g`'s `M116` — has finished. So blocking on that socket
+read is how `pulsar_preheat()` waits for both zones to genuinely reach
+temperature, with no polling and no operator judgement call about
+whether DWC "looks close enough". Timeout is 15 minutes; if it fires,
+something is actually wrong (heater fault, thermistor fault, etc.) and
+`pulsar_preheat()` pops a warning.
+
 ```
 debug_pulsar_ready = True
   pulsar_ready_pin   = 0
@@ -125,6 +138,19 @@ debug_pulsar_ready = True
     return resp
   end
 
+  def duet_send_m98_and_read(filename, params, timeout):
+    socket_send_string("M98 P", "duet")
+    socket_send_byte(34, "duet")
+    socket_send_string("0:/macros/", "duet")
+    socket_send_string(filename, "duet")
+    socket_send_byte(34, "duet")
+    socket_send_string(params, "duet")
+    socket_send_byte(10, "duet")
+    sleep(0.05)
+    resp = socket_read_string("duet", "", "", False, timeout)
+    return resp
+  end
+
   def duet_handshake(timeout):
     resp = duet_send_line_and_read("M115", timeout)
     if (resp != ""):
@@ -139,9 +165,21 @@ debug_pulsar_ready = True
   end
 
   def pulsar_preheat(barrel, nozzle):
-    duet_send_m98("pulsar_preheat.g", " B" + to_str(barrel) + " N" + to_str(nozzle))
+    resp = duet_send_m98_and_read("pulsar_preheat.g", " B" + to_str(barrel) + " N" + to_str(nozzle), 900.0)
+    if (resp == ""):
+      popup("WARNING: preheat timed out waiting for the Duet. Check heaters, thermistors and M570 config.", title="Debug", warning=True, error=False, blocking=True)
+    end
+    return resp
   end
 
+  def pulsar_show_temp():
+    resp = duet_send_line_and_read("M105", 2.0)
+    popup("Temp:" + resp, title="Debug", warning=False, error=False, blocking=True)
+  end
+
+  # Reserved for future Duet->UR safety signalling (e-stop / pause)
+  # once a DIO line is wired between the two boards. Not used for
+  # temperature gating any more — pulsar_preheat() blocks on its own.
   def wait_for_pulsar_enabled(debug, pin):
     if (debug == False):
       while (get_standard_digital_in(pin) == False):
@@ -185,16 +223,28 @@ debug_pulsar_ready = True
 duet_open("172.22.22.100", 23)
   pulsar_clear_heater_faults()
   pulsar_preheat(190, 215)
+  pulsar_show_temp()
 ```
 
 Wire `190` and `215` to GH inputs for barrel/nozzle temps.
+
+`pulsar_preheat(...)` **blocks** — the robot sits on this line until
+the Duet confirms both zones are at temp, which can be several minutes
+from cold. The `pulsar_show_temp()` call right after it pops up the
+actual `M105` reading once preheat completes, so the operator gets a
+positive confirmation of the real numbers rather than just trusting
+the block silently succeeded. Drop it if you don't want the extra
+popup, but keep pulsar_preheat first — the block itself is what
+guarantees the heaters are ready before anything downstream runs.
 
 ---
 
 ### 2. Pulsar Start (before first print move)
 
-Wait for the Pulsar ready signal (no-op in debug, DIO poll in
-production), pop the operator gate, then start the daemon.
+Pop the operator gate, then start the daemon. The temperature wait
+already happened in Pulsar Setup (`pulsar_preheat` blocks), so there's
+nothing to wait on here — just the final "I've checked the machine"
+human checkpoint before the screw starts turning.
 
 **Name**: `Pulsar Start`
 **Manufacturer**: `UR`
@@ -203,10 +253,14 @@ production), pop the operator gate, then start the daemon.
 **Command code**:
 
 ```
-wait_for_pulsar_enabled(debug_pulsar_ready, pulsar_ready_pin)
-  popup("Press Ready to start your print", title="Operator_Safety", warning=False, error=False, blocking=True)
+popup("Press Ready to start your print", title="Operator_Safety", warning=False, error=False, blocking=True)
   pulsar_start_extrusion(900, 100)
 ```
+
+`wait_for_pulsar_enabled(debug_pulsar_ready, pulsar_ready_pin)` is
+still defined in Setup's Declaration but no longer called here — add
+it back to this block if/when a future Duet→UR safety signal (e-stop
+/ pause) is wired up and needs checking before motion starts.
 
 | Substitute in | Default | Purpose |
 |---|---|---|
@@ -373,13 +427,13 @@ placeholders pre-wired:
 duet_open("172.22.22.100", 23)
   pulsar_clear_heater_faults()
   pulsar_preheat([Barrell], [Nozzle])
+  pulsar_show_temp()
 ```
 
 ### Start — Command code
 
 ```
-wait_for_pulsar_enabled(debug_pulsar_ready, pulsar_ready_pin)
-  popup("[Popup]", title="Operator_Safety", warning=False, error=False, blocking=True)
+popup("[Popup]", title="Operator_Safety", warning=False, error=False, blocking=True)
   pulsar_start_extrusion(900, [%])
 ```
 
@@ -433,22 +487,19 @@ The `900` (Start feed F-value) and `"172.22.22.100"` (Duet IP) aren't
 templated — add `[F]` / `[IP]` placeholders to taste if you want to
 parameterise them too.
 
-## Switching to production (DIO wired)
+## Note on the Duet→UR ready DIO
 
-Two edits in **Pulsar Setup's Declaration**:
+Earlier revisions of this doc used a `debug_pulsar_ready` /
+`pulsar_ready_pin` pair to gate on a Duet→UR hardware signal for
+"heaters at temp". That's no longer needed for temperature — since
+`pulsar_preheat()` blocks on the socket reply itself (see the Setup
+section above), the heaters are guaranteed ready before the program
+ever reaches Pulsar Start.
 
-```
-debug_pulsar_ready = False     ; was True
-pulsar_ready_pin   = 0         ; whichever UR input you used
-```
-
-Nothing else changes on the UR side. The Duet's
-`pulsar_signal_ready.g` and `pulsar_signal_clear.g` macros need their
-`M42` lines uncommented with the matching Duet output pin — that's the
-hardware-side switch.
-
-Once production-wired, **Pulsar Start**'s `wait_for_pulsar_enabled`
-call blocks silently until the Duet asserts the ready DIO, and *only
-then* does the popup appear. The operator no longer has to monitor
-DWC; the script gates itself on the wire, then asks the operator to
-acknowledge.
+The `wait_for_pulsar_enabled(debug, pin)` function is kept in the
+Declaration purely as a placeholder for a *different* future use: a
+Duet→UR safety signal (e-stop / pause) that would need its own wiring
+and its own Duet-side macro logic, separate from
+`pulsar_signal_ready.g` / `pulsar_signal_clear.g`. Don't wire those
+existing signal macros up expecting them to gate temperature — that
+job is already done.

@@ -24,7 +24,7 @@ periodically. Moving the keep-it-spinning logic onto the Duet:
 | `sys/config.g` | `0:/sys/config.g` | Reference copy of the live Duet config. Includes the `M98 P"pulsar_init.g"` hook. Not auto-deployed — the Duet has its own working copy. |
 | `sys/daemon.g` | `0:/sys/daemon.g` | Background loop. RRF auto-runs while booted. |
 | `sys/pulsar_init.g` | `0:/sys/pulsar_init.g` | Declares the four globals the daemon reads. Called once from `config.g`. |
-| `macros/pulsar_preheat.g` | `0:/macros/pulsar_preheat.g` | Set both zone targets, block until reached. |
+| `macros/pulsar_preheat.g` | `0:/macros/pulsar_preheat.g` | Set both zone targets, block until reached. Sets each heater's active/standby setpoint individually via the object model (`tools[0].active[i]`) rather than `M568`'s `S<a>:<b>` colon-list — the colon-list was observed dropping the second value when built from expression substitution, sending both zones to the same temperature. |
 | `macros/pulsar_start.g` | `0:/macros/pulsar_start.g` | Begin continuous extrusion. Sets `pulsar_running = true`. |
 | `macros/pulsar_stop.g` | `0:/macros/pulsar_stop.g` | Clear `pulsar_running`, zero flow, release motor. |
 | `macros/pulsar_flow.g` | `0:/macros/pulsar_flow.g` | `M221 S<percent>` — modulate flow without stopping the screw. |
@@ -98,30 +98,38 @@ wrap each of these.
   queued chunk exceeds RRF's move-duration cap, you'll see "move
   duration too long" again. Raise dwell or lower chunk.
 
-## Duet→UR ready signal (hardware DIO)
+## Duet→UR ready signal (hardware DIO) — reserved for future safety use
 
-The UR no longer polls the Duet to know when it's safe to start motion —
-the Duet asserts a digital output once both heaters reach setpoint and
-the UR reads that as a digital input.
+Earlier revisions used this signal to tell the UR when preheat had
+finished. That's no longer how temperature readiness works: the UR now
+blocks directly on the Telnet reply from `M98 P"pulsar_preheat.g" ..."`
+— RRF doesn't send "ok" back until the whole macro, including the
+`M116` inside it, has completed. So the UR knows both zones are at
+temp without needing this wire at all.
+
+The DIO plumbing is kept in place for a **different**, not-yet-built
+purpose: a Duet→UR safety signal (e-stop / pause) that would need its
+own trigger logic distinct from "heaters at temp".
 
 ```
    Duet 3 (out6 / out7 / ioN)              UR5 CB3
    ┌────────────────┐                      ┌────────────────┐
    │ M42 P<pin> S1  │ ───── 24 V wire ─────│ DI<n>          │
-   │ when ready     │                      │ get_standard_  │
+   │ when safe      │                      │ get_standard_  │
    │                │ ◄──── 0 V (GND) ─────│  digital_in()  │
    └────────────────┘                      └────────────────┘
 ```
 
-`pulsar_preheat.g` fires `M98 P"pulsar_signal_ready.g"` after its
-`M116` returns; `pulsar_stop.g` and `pulsar_cooldown.g` fire
-`M98 P"pulsar_signal_clear.g"`. Both signal macros currently have their
-`M42` line commented — uncomment with the correct Duet output pin once
-the wire is in.
+`pulsar_preheat.g` still fires `M98 P"0:/macros/pulsar_signal_ready.g"`
+after its `M116` returns, and `pulsar_stop.g` / `pulsar_cooldown.g`
+still fire `pulsar_signal_clear.g` — harmless no-ops today since both
+signal macros have their `M42` line commented out. Repurpose these (or
+write new ones) when the actual safety-signal use case is designed;
+don't assume they still mean "preheat done".
 
-On the UR side, `wait_for_pulsar_enabled(debug, pin)` blocks until the
-input goes high. While `debug=True`, it shows a confirmation popup
-instead, so the workflow is fully testable without the wire.
+On the UR side, `wait_for_pulsar_enabled(debug, pin)` still exists in
+`lib_pulsar.script` for this future use, but isn't called anywhere in
+the current preheat/start sequence.
 
 ## RRF conditional-block syntax note
 
