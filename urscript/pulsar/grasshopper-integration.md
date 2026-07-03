@@ -3,6 +3,24 @@
 How to weave Pulsar extrusion control into a Grasshopper-generated UR
 program using **Custom Command** components.
 
+> **⚠️ Updated for the responsiveness redesign — re-read before pasting.**
+> The model changed materially. The code blocks below have been updated
+> to match, but the canonical source of truth is
+> `urscript/pulsar/lib_pulsar.script` (functions) and the two READMEs.
+> What changed:
+> - **Preheat + purge moved out of the live program** into a separate,
+>   blocking `preheat_purge.script` the operator runs once beforehand.
+>   **Pulsar Setup no longer preheats** — it just connects. The live
+>   program never blocks.
+> - **Live control is via Duet globals**, not `M221`:
+>   `pulsar_set_rate(feed)` (rate), `pulsar_pause()` / `pulsar_resume()`.
+>   Screw speed *is* the flow — there's no flow-% multiplier any more.
+>   `pulsar_flow_off()` / `pulsar_flow_on()` remain as aliases → pause /
+>   resume.
+> - **No retract** in the pause / layer-change / travel flows (inert on a
+>   screw). `pulsar_start_extrusion(feed)` dropped its flow argument.
+> - **PETG defaults:** barrel 215 °C, nozzle 245 °C, feed 600 mm/min.
+
 The GH component has four inputs we care about:
 
 | Input | What it does |
@@ -188,24 +206,32 @@ debug_pulsar_ready = True
     end
   end
 
-  def pulsar_start_extrusion(feed, flow):
-    duet_send_m98("pulsar_start.g", " F" + to_str(feed) + " R" + to_str(flow))
+  def pulsar_start_extrusion(feed):
+    duet_send_m98("pulsar_start.g", " F" + to_str(feed))
+  end
+
+  # Live control — set Duet globals directly, fire-and-forget. Immediate
+  # (meta-command, not queued motion), picked up within ~1 chunk.
+  def pulsar_set_rate(feed):
+    duet_send_line("set global.pulsar_feed = " + to_str(feed))
+  end
+
+  def pulsar_pause():
+    duet_send_line("set global.pulsar_running = false")
+  end
+
+  def pulsar_resume():
+    duet_send_line("set global.pulsar_running = true")
+  end
+
+  # Legacy aliases — flow % is no longer meaningful (rate = screw speed);
+  # these now just pause / resume. Prefer pulsar_pause/resume/set_rate.
+  def pulsar_flow_off():
+    pulsar_pause()
   end
 
   def pulsar_flow_on(flow):
-    duet_send_m98("pulsar_flow.g", " S" + to_str(flow))
-  end
-
-  def pulsar_flow_off():
-    duet_send_m98("pulsar_flow.g", " S0")
-  end
-
-  def pulsar_retract(mm, feed):
-    duet_send_m98("pulsar_retract.g", " S" + to_str(mm) + " F" + to_str(feed))
-  end
-
-  def pulsar_unretract(mm, feed):
-    duet_send_m98("pulsar_unretract.g", " S" + to_str(mm) + " F" + to_str(feed))
+    pulsar_resume()
   end
 
   def pulsar_stop_extrusion():
@@ -221,30 +247,25 @@ debug_pulsar_ready = True
 
 ```
 duet_open("172.22.22.100", 23)
-  pulsar_clear_heater_faults()
-  pulsar_preheat(190, 215)
-  pulsar_show_temp()
+  if (duet_handshake(2.0) == False):
+    popup("ERROR: Duet did not respond. Run preheat_purge first. Aborting.", title="Fatal", warning=False, error=True, blocking=True)
+    halt
+  end
 ```
 
-Wire `190` and `215` to GH inputs for barrel/nozzle temps.
-
-`pulsar_preheat(...)` **blocks** — the robot sits on this line until
-the Duet confirms both zones are at temp, which can be several minutes
-from cold. The `pulsar_show_temp()` call right after it pops up the
-actual `M105` reading once preheat completes, so the operator gets a
-positive confirmation of the real numbers rather than just trusting
-the block silently succeeded. Drop it if you don't want the extra
-popup, but keep pulsar_preheat first — the block itself is what
-guarantees the heaters are ready before anything downstream runs.
+Setup **no longer preheats** — the operator runs `preheat_purge.script`
+once beforehand, so both zones are already at temp and the screw is
+primed. Setup just opens the socket and does a quick handshake so an
+unreachable Duet fails loud instead of silently. Nothing here blocks.
 
 ---
 
 ### 2. Pulsar Start (before first print move)
 
-Pop the operator gate, then start the daemon. The temperature wait
-already happened in Pulsar Setup (`pulsar_preheat` blocks), so there's
-nothing to wait on here — just the final "I've checked the machine"
-human checkpoint before the screw starts turning.
+Pop the operator gate, then start the daemon. Preheat + purge already
+happened (separate routine), so there's nothing to wait on — just the
+final "I've checked the machine" human checkpoint before the screw
+starts turning.
 
 **Name**: `Pulsar Start`
 **Manufacturer**: `UR`
@@ -254,20 +275,19 @@ human checkpoint before the screw starts turning.
 
 ```
 popup("Press Ready to start your print", title="Operator_Safety", warning=False, error=False, blocking=True)
-  pulsar_start_extrusion(900, 100)
+  pulsar_start_extrusion(600)
 ```
 
-`wait_for_pulsar_enabled(debug_pulsar_ready, pulsar_ready_pin)` is
-still defined in Setup's Declaration but no longer called here — add
-it back to this block if/when a future Duet→UR safety signal (e-stop
-/ pause) is wired up and needs checking before motion starts.
+To change the rate live during the print, call `pulsar_set_rate(<feed>)`
+from a Flow component (below). `wait_for_pulsar_enabled(...)` is still
+defined in Setup's Declaration but not called — add it back if/when a
+future Duet→UR safety signal is wired up.
 
 | Substitute in | Default | Purpose |
 |---|---|---|
 | `Press Ready to start your print` | — | Popup message text |
 | `Operator_Safety` | — | Popup title |
-| `900` | — | Screw F-value (mm/min) |
-| `100` | — | Initial flow % |
+| `600` | — | Screw F-value / start rate (mm/min) |
 
 ---
 
@@ -284,16 +304,14 @@ already shut down.
 **Command code**:
 
 ```
-pulsar_flow_off()
-  pulsar_retract(3.0, 600)
+pulsar_pause()
   pulsar_stop_extrusion()
   pulsar_cooldown()
 ```
 
-| Substitute in | Default | Purpose |
-|---|---|---|
-| `3.0` | — | Retract distance (mm) |
-| `600` | — | Retract feedrate (mm/min) |
+`pulsar_pause()` halts the screw within ~one chunk so nothing extrudes
+during the home move; `pulsar_stop_extrusion()` then releases the motor
+and `pulsar_cooldown()` turns the heaters off.
 
 ---
 
@@ -325,10 +343,10 @@ popup("Job Complete! Please put all the caps back on the pens and tidy up!", tit
 ### 5. Pulsar Pause (anywhere mid-print)
 
 Scripted pause for hardware insertion / inspection / interventions.
-Stops the bead, retracts, blocks on a popup, then unretracts and
-resumes flow when the operator clicks OK. The screw stays parked
-while the popup is showing because `M221 S0` pins the multiplier at
-zero even though the daemon keeps queueing chunks.
+`pulsar_pause()` stops the daemon feeding chunks, so the screw halts
+within ~one chunk; the popup blocks; `pulsar_resume()` restarts the
+screw at the current rate when the operator clicks OK. No retract — on
+a screw the melt volume swallows it; stopping the screw breaks the bead.
 
 **Name**: `Pulsar Pause`
 **Manufacturer**: `UR`
@@ -337,41 +355,37 @@ zero even though the daemon keeps queueing chunks.
 **Command code**:
 
 ```
-pulsar_flow_off()
-  pulsar_retract(3.0, 600)
+pulsar_pause()
   popup("Insert hardware now. Click OK to resume.", title="Pause", warning=False, error=False, blocking=True)
-  pulsar_unretract(3.0, 600)
-  pulsar_flow_on(100)
+  pulsar_resume()
 ```
 
 | Substitute in | Default | Purpose |
 |---|---|---|
-| `3.0` | — | Retract distance (mm) |
-| `600` | — | Retract feedrate (mm/min) |
 | `Insert hardware now...` | — | Popup message text |
 | `Pause` | — | Popup title |
-| `100` | — | Flow % to resume at (match the active layer's flow) |
 
 ---
 
 ### 6. Pulsar Pre-Travel (before each travel `movej`)
 
 ```
-pulsar_flow_off()
-  pulsar_retract(3.0, 600)
+pulsar_pause()
 ```
 
 ### 7. Pulsar Post-Travel (after each travel `movej`)
 
 ```
-pulsar_unretract(3.0, 600)
-  pulsar_flow_on(100)
+pulsar_resume()
 ```
 
-### 8. Pulsar Flow (anywhere mid-print)
+### 8. Pulsar Flow / rate change (anywhere mid-print)
+
+Set the live deposition rate (screw speed, mm/min). Takes effect within
+~one chunk. This replaces the old flow-% component.
 
 ```
-pulsar_flow_on(75)
+pulsar_set_rate(450)
 ```
 
 ---
@@ -388,19 +402,17 @@ End fires the operator popup and closes the socket.
 
 ## Parameterising from Grasshopper
 
+Note: `barrel` / `nozzle` temps now live in `preheat_purge.script`
+(run once beforehand), NOT in a GH component — Setup no longer preheats.
+
 | Parameter | Default | Component | Why |
 |---|---|---|---|
-| `barrel` temp | 190 | Setup | Material switch (PLA vs PETG) |
-| `nozzle` temp | 215 | Setup | Material switch |
 | Duet IP | `172.22.22.100` | Setup | Could change per network |
-| `feed` (F-value) | 900 | Start | Volumetric calibration |
-| `flow` initial % | 100 | Start | Bead width tuning |
+| `feed` (F-value) | 600 | Start | Start rate; screw speed = deposition rate |
+| Live rate `feed` | 450 | Flow | Mid-print rate change (`pulsar_set_rate`) |
 | Start popup text/title | — | Start | Per-print operator notes |
-| `retract` mm | 3.0 | Stop / Pause / Travel | Material-specific |
-| `retract` feed | 600 | Stop / Pause / Travel | Material-specific |
 | End popup text/title | — | End | Per-print operator notes |
 | Pause popup text/title | — | Pause | Per-pause instructions |
-| Resume flow % | 100 | Pause | Match active layer flow |
 
 Strings (popup text, title) need to be quoted in the URScript output
 — same as today. Pipe them in the same way you pipe the numeric
@@ -414,34 +426,30 @@ placeholders pre-wired:
 
 | Placeholder | Maps to |
 |---|---|
-| `[Barrell]` | Barrel zone target temp (°C) |
-| `[Nozzle]` | Nozzle zone target temp (°C) |
 | `[Popup]` | Popup message text |
-| `[LD]` | Retract distance (mm) |
-| `[LE]` | Retract extrusion rate (mm/min) |
-| `[%]` | Flow scale (%) |
+| `[F]` | Feed / rate (mm/min = screw speed) |
 
 ### Setup — Command code
 
 ```
 duet_open("172.22.22.100", 23)
-  pulsar_clear_heater_faults()
-  pulsar_preheat([Barrell], [Nozzle])
-  pulsar_show_temp()
+  if (duet_handshake(2.0) == False):
+    popup("ERROR: Duet did not respond. Run preheat_purge first. Aborting.", title="Fatal", warning=False, error=True, blocking=True)
+    halt
+  end
 ```
 
 ### Start — Command code
 
 ```
 popup("[Popup]", title="Operator_Safety", warning=False, error=False, blocking=True)
-  pulsar_start_extrusion(900, [%])
+  pulsar_start_extrusion([F])
 ```
 
 ### Stop — Command code
 
 ```
-pulsar_flow_off()
-  pulsar_retract([LD], [LE])
+pulsar_pause()
   pulsar_stop_extrusion()
   pulsar_cooldown()
 ```
@@ -456,45 +464,40 @@ popup("[Popup]", title="Job_Done", warning=False, error=False, blocking=True)
 ### Pause — Command code
 
 ```
-pulsar_flow_off()
-  pulsar_retract([LD], [LE])
+pulsar_pause()
   popup("[Popup]", title="Pause", warning=False, error=False, blocking=True)
-  pulsar_unretract([LD], [LE])
-  pulsar_flow_on([%])
+  pulsar_resume()
 ```
 
 ### Pre-Travel — Command code
 
 ```
-pulsar_flow_off()
-  pulsar_retract([LD], [LE])
+pulsar_pause()
 ```
 
 ### Post-Travel — Command code
 
 ```
-pulsar_unretract([LD], [LE])
-  pulsar_flow_on([%])
+pulsar_resume()
 ```
 
-### Flow — Command code
+### Flow / rate — Command code
 
 ```
-pulsar_flow_on([%])
+pulsar_set_rate([F])
 ```
 
-The `900` (Start feed F-value) and `"172.22.22.100"` (Duet IP) aren't
-templated — add `[F]` / `[IP]` placeholders to taste if you want to
-parameterise them too.
+The `"172.22.22.100"` (Duet IP) isn't templated — add an `[IP]`
+placeholder to taste if you want to parameterise it too.
 
 ## Note on the Duet→UR ready DIO
 
 Earlier revisions of this doc used a `debug_pulsar_ready` /
 `pulsar_ready_pin` pair to gate on a Duet→UR hardware signal for
-"heaters at temp". That's no longer needed for temperature — since
-`pulsar_preheat()` blocks on the socket reply itself (see the Setup
-section above), the heaters are guaranteed ready before the program
-ever reaches Pulsar Start.
+"heaters at temp". That's no longer needed for temperature — the
+operator runs `preheat_purge.script` first, and `pulsar_preheat()`
+there blocks on the socket reply itself until both zones are at temp,
+so the heaters are already ready before the live program ever runs.
 
 The `wait_for_pulsar_enabled(debug, pin)` function is kept in the
 Declaration purely as a placeholder for a *different* future use: a

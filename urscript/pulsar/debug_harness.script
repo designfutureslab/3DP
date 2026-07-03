@@ -2,16 +2,25 @@
 #
 # Standalone, fully-formed URScript program. Paste into a Script Code
 # node on the pendant (File / multi-line mode). Run once through the
-# 11 popup-gated steps to exercise the daemon-based extrusion control
-# end-to-end without any motion.
+# 12 popup-gated steps to exercise the daemon-based extrusion control
+# end-to-end without any motion. This DEBUG harness still does the full
+# preheat+purge itself so it can be run cold in one go; the live print
+# program does NOT — preheat+purge live in the separate, blocking
+# preheat_purge.script that the operator runs once beforehand.
 #
 # ARCHITECTURE
 #   - All extrusion state lives on the Duet (sys/daemon.g + macros).
-#   - UR fires Duet macros via M98 over Telnet.
-#   - Preheat is BLOCKING: pulsar_preheat() waits on the socket reply,
-#     which the Duet only sends once pulsar_preheat.g's internal M116
-#     has finished (i.e. both heaters are genuinely at temp). No
-#     manual "check DWC yourself" step, no polling loop.
+#   - UR fires Duet macros via M98 over Telnet, and sets Duet globals
+#     directly for live control (rate / pause).
+#   - The screw is a stepper, so daemon.g keeps it turning by feeding
+#     SHORT G1 E chunks. Live rate = `set global.pulsar_feed`; pause =
+#     `set global.pulsar_running = false`. Both are immediate meta-
+#     commands (no queue lag) and fire-and-forget (no socket read, no
+#     UR blocking) — the screw responds within ~1 chunk (~0.3-0.8 s).
+#   - Preheat and purge ARE blocking: pulsar_preheat()/pulsar_purge()
+#     wait on the socket reply, which the Duet only sends once the
+#     macro's internal M116 (at temp) / M400 (purge done) has finished.
+#     No polling, no "check DWC yourself" step.
 #   - Every popup() call is blocking=True — Polyscope 5's default is
 #     NON-blocking, so the shorthand `popup("...")` on its own does not
 #     block. This is a common footgun coming from CB3.
@@ -22,8 +31,8 @@
 #
 # DUET-SIDE SETUP REQUIRED (see /duet/ in this repo):
 #   - Upload `0:/sys/daemon.g` and `0:/sys/pulsar_init.g` from the repo.
-#   - Upload every `0:/macros/pulsar_*.g` file (ten total). Verify via
-#     DWC → Macros tab that all ten appear before running this harness.
+#   - Upload every `0:/macros/pulsar_*.g` file (eleven total, incl.
+#     pulsar_purge.g). Verify via DWC → Macros tab before running.
 #   - Upload `0:/sys/config.g` too — it defines tool 1 (barrel/H0) and
 #     tool 2 (nozzle/H1), which pulsar_preheat.g and pulsar_cooldown.g
 #     now target directly. Without it, step 5 will error immediately.
@@ -40,14 +49,18 @@ def Program():
   ip = "172.22.22.100"
   port = 23
 
-  barrel = 190
-  nozzle = 215
+  # PETG. barrel = H0 ("Top"), nozzle = H1 ("Bottom").
+  barrel = 215
+  nozzle = 245
 
-  feed = 900
-  flow = 100
+  # feed = starting screw speed (mm/min = deposition rate). feed2 is used
+  # in the live rate-change step to show it takes effect within ~1 chunk.
+  feed  = 600
+  feed2 = 350
 
-  retract_mm = 3.0
-  retract_feed = 600
+  # Purge prime (blocking) — mm of E and the feed to push it at.
+  purge_mm   = 200
+  purge_feed = 300
 
   # ---------------- HELPERS ----------------
 
@@ -114,20 +127,28 @@ def Program():
     return resp
   end
 
-  def pulsar_start(f, pct):
-    duet_send_m98("pulsar_start.g", " F" + to_str(f) + " R" + to_str(pct))
+  # Blocking purge (M400 inside pulsar_purge.g holds the "ok").
+  def pulsar_purge(mm, f):
+    duet_send_m98_and_read("pulsar_purge.g", " E" + to_str(mm) + " F" + to_str(f), 300.0)
   end
 
-  def pulsar_flow(value):
-    duet_send_m98("pulsar_flow.g", " S" + to_str(value))
+  def pulsar_start(f):
+    duet_send_m98("pulsar_start.g", " F" + to_str(f))
   end
 
-  def pulsar_retract(mm, f):
-    duet_send_m98("pulsar_retract.g", " S" + to_str(mm) + " F" + to_str(f))
+  # Live control — set Duet globals directly, fire-and-forget. RRF
+  # processes these immediately (meta-commands, not queued motion); the
+  # daemon picks them up within ~1 chunk. No socket read, so no blocking.
+  def pulsar_set_rate(f):
+    duet_send_line("set global.pulsar_feed = " + to_str(f))
   end
 
-  def pulsar_unretract(mm, f):
-    duet_send_m98("pulsar_unretract.g", " S" + to_str(mm) + " F" + to_str(f))
+  def pulsar_pause():
+    duet_send_line("set global.pulsar_running = false")
+  end
+
+  def pulsar_resume():
+    duet_send_line("set global.pulsar_running = true")
   end
 
   def pulsar_stop():
@@ -142,42 +163,45 @@ def Program():
 
   # ---------------- EXECUTION ----------------
 
-  popup("1/11  Connect to Duet at " + ip, title="Debug", warning=False, error=False, blocking=True)
+  popup("1/12  Connect to Duet at " + ip, title="Debug", warning=False, error=False, blocking=True)
   duet_open(ip, port)
 
-  popup("2/11  Handshake (M115)", title="Debug", warning=False, error=False, blocking=True)
+  popup("2/12  Handshake (M115)", title="Debug", warning=False, error=False, blocking=True)
   resp = duet_send_line_and_read("M115", 2.0)
   if (resp == ""):
     popup("WARNING: no response from Duet. Check IP / cable / firmware.", title="Debug", warning=True, error=False, blocking=True)
   end
 
-  popup("3/11  Clear heater faults", title="Debug", warning=False, error=False, blocking=True)
+  popup("3/12  Clear heater faults", title="Debug", warning=False, error=False, blocking=True)
   pulsar_clear_faults()
 
-  popup("4/11  Show temps before preheat", title="Debug", warning=False, error=False, blocking=True)
+  popup("4/12  Show temps before preheat", title="Debug", warning=False, error=False, blocking=True)
   pulsar_show_temp()
 
-  popup("5/11  Preheat (BLOCKING) to barrel=" + to_str(barrel) + " nozzle=" + to_str(nozzle) + ". This can take several minutes from cold — the next popup won't appear until the Duet confirms both zones are at temp.", title="Debug", warning=False, error=False, blocking=True)
+  popup("5/12  Preheat (BLOCKING) to barrel=" + to_str(barrel) + " nozzle=" + to_str(nozzle) + ". This can take several minutes from cold — the next popup won't appear until the Duet confirms both zones are at temp.", title="Debug", warning=False, error=False, blocking=True)
   pulsar_preheat(barrel, nozzle)
 
-  popup("6/11  Preheat complete — reported temps:", title="Debug", warning=False, error=False, blocking=True)
+  popup("6/12  Preheat complete — reported temps:", title="Debug", warning=False, error=False, blocking=True)
   pulsar_show_temp()
 
-  popup("7/11  Start extrusion — daemon takes over (feed=" + to_str(feed) + " flow=" + to_str(flow) + ")", title="Debug", warning=False, error=False, blocking=True)
-  pulsar_start(feed, flow)
+  popup("7/12  Purge (BLOCKING): " + to_str(purge_mm) + " mm at F" + to_str(purge_feed) + ". Waits until the move completes. Watch for clean flow.", title="Debug", warning=False, error=False, blocking=True)
+  pulsar_purge(purge_mm, purge_feed)
 
-  popup("8/11  Layer-change test: flow off, retract", title="Debug", warning=False, error=False, blocking=True)
-  pulsar_flow(0)
-  pulsar_retract(retract_mm, retract_feed)
+  popup("8/12  Start extrusion — daemon feeds short chunks (feed=" + to_str(feed) + "). Screw should turn continuously.", title="Debug", warning=False, error=False, blocking=True)
+  pulsar_start(feed)
 
-  popup("9/11  Resume: unretract, flow on", title="Debug", warning=False, error=False, blocking=True)
-  pulsar_unretract(retract_mm, retract_feed)
-  pulsar_flow(flow)
+  popup("9/12  Live rate change to feed=" + to_str(feed2) + ". Watch the screw slow within ~1 chunk — no wait for a long move to drain.", title="Debug", warning=False, error=False, blocking=True)
+  pulsar_set_rate(feed2)
 
-  popup("10/11  Shutdown: stop daemon, cool down", title="Debug", warning=False, error=False, blocking=True)
+  popup("10/12  Pause test: screw should stop within ~1 chunk. Click OK to resume.", title="Debug", warning=False, error=False, blocking=True)
+  pulsar_pause()
+  popup("10/12  (paused) Click OK to resume the screw.", title="Debug", warning=False, error=False, blocking=True)
+  pulsar_resume()
+
+  popup("11/12  Shutdown: stop daemon, cool down", title="Debug", warning=False, error=False, blocking=True)
   pulsar_stop()
 
-  popup("11/11  Close socket", title="Debug", warning=False, error=False, blocking=True)
+  popup("12/12  Close socket", title="Debug", warning=False, error=False, blocking=True)
   duet_close()
 
   popup("Debug harness complete", title="Debug", warning=False, error=False, blocking=True)

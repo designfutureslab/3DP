@@ -127,24 +127,69 @@ def wait_for_pulsar_enabled(debug, pin):
   end
 end
 
+# Prime the screw with a blocking purge extrude. Only used by the
+# separate preheat+purge routine (preheat_purge.script), before a job —
+# never on the live print path. Blocks on the socket reply because
+# pulsar_purge.g ends in M400 (wait-for-move-complete), so RRF holds the
+# "ok" until the purge physically finishes. Run only while the daemon is
+# idle (before pulsar_start_extrusion).
+def pulsar_purge(mm, feed):
+  resp = duet_send_m98_and_read("pulsar_purge.g", " E" + to_str(mm) + " F" + to_str(feed), 300.0)
+  return resp
+end
+
 # Begin continuous extrusion via the Duet daemon. After this returns, the
-# screw is turning and the daemon will keep the move queue topped up.
-def pulsar_start_extrusion(feed, flow):
-  duet_send_m98("pulsar_start.g", " F" + to_str(feed) + " R" + to_str(flow))
+# screw is turning; the daemon feeds short chunks at global.pulsar_feed.
+# No flow argument any more — rate is screw speed (pulsar_set_rate).
+def pulsar_start_extrusion(feed):
+  duet_send_m98("pulsar_start.g", " F" + to_str(feed))
+end
+
+# ---- LIVE control (fire-and-forget, ~1 chunk latency) ----
+#
+# These set Duet globals directly over Telnet. RRF processes a `set
+# global.x = ...` immediately (it's a meta-command, not queued motion),
+# and the daemon picks the new value up on its next iteration — roughly
+# one chunk, ~0.3-0.8 s with the default 5 mm chunk. This is what
+# replaced the old M221-based flow control, which lagged by a whole
+# queued chunk. No socket read: we don't wait, so the UR never blocks.
+
+# Set the live deposition rate (screw speed, mm/min). This is the "flow"
+# knob — on a single screw, speed is the volumetric rate.
+def pulsar_set_rate(feed):
+  duet_send_line("set global.pulsar_feed = " + to_str(feed))
+end
+
+# Pause the bead: stop the daemon feeding chunks. The screw halts within
+# ~one chunk. Heaters and socket stay up; resume with pulsar_resume().
+# Do NOT pause by setting the rate to 0 — daemon.g divides the dwell by
+# feed, so rate must stay > 0. Pausing is always via the running flag.
+def pulsar_pause():
+  duet_send_line("set global.pulsar_running = false")
+end
+
+def pulsar_resume():
+  duet_send_line("set global.pulsar_running = true")
+end
+
+# ---- Legacy flow aliases ----
+# Kept so existing snippets / GH code that call pulsar_flow_off()/on()
+# still work. Flow % is no longer meaningful (rate = screw speed), so
+# these now just pause / resume the screw. Prefer pulsar_pause() /
+# pulsar_resume() / pulsar_set_rate() in new code.
+def pulsar_flow_off():
+  pulsar_pause()
 end
 
 def pulsar_flow_on(flow):
-  duet_send_m98("pulsar_flow.g", " S" + to_str(flow))
+  pulsar_resume()
 end
 
-def pulsar_flow_off():
-  duet_send_m98("pulsar_flow.g", " S0")
-end
-
-# Retract / unretract. Use after pulsar_flow_off() and before a UR travel
-# move. The daemon keeps queueing extrusion chunks behind your retract, so
-# don't sit retracted for more than the chunk duration or the screw will
-# resume pushing material before you've unretracted.
+# Retract / unretract. Largely a no-op on a screw extruder (the large
+# compressible melt volume swallows a few mm of E), so the pause and
+# layer-change flows no longer call these — pulsar_pause() alone breaks
+# the bead. Kept available if you want to experiment. Only meaningful
+# while the daemon is paused, else it fights the daemon's chunks.
 def pulsar_retract(mm, feed):
   duet_send_m98("pulsar_retract.g", " S" + to_str(mm) + " F" + to_str(feed))
 end
