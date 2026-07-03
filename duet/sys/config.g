@@ -86,8 +86,32 @@ M950 F1 C"out6" ; create fan #1
 M106 P1 S1 L0 X1 B0.1 ; configure fan #1
 
 ; Tools
-M563 P0 S"Pulsar" D0 H1:0 F0:1 ; create tool #0
-M568 P0 R0 S0 ; set initial tool #0 active and standby temperatures to 0C
+;
+; Two bugs, two fixes, in order:
+; 1. H0/H1 both listed under one tool's H<list> (`H1:0`) — any scalar-S
+;    command that touched either heater (G10, M568, even bare M104 Hn)
+;    routed through the tool and broadcast that one S to every heater
+;    the tool owned. Confirmed via M409 K"heat.heaters".
+; 2. Took H0/H1 off the tool entirely so nothing could broadcast — but
+;    then M104 H0/M104 H1 accepted with no error and did nothing; the
+;    DWC Tools row showed the heater as "n/a" and neither zone heated.
+;    Heaters that belong to no tool never enter the "active" state on
+;    this firmware.
+; 3. Gave each zone its own single-heater tool, set via G10 Pn Sn Rn —
+;    but G10 only writes target values, it doesn't change the heater's
+;    off/standby/active state. Without T-selecting the tool, the heater
+;    sat in standby: M116 Pn saw nothing pending and returned instantly.
+;
+; Fix: same one-heater-per-tool split, but set/activate via M568 Pn ...
+; A2 instead of G10 — the A parameter explicitly forces "active" state
+; without needing to T-select the tool. Safe here (no broadcast risk)
+; because each tool owns exactly one heater. Tool 0 keeps the extruder
+; drive + fans for extrusion (T0, unrelated to heating).
+M563 P0 S"Pulsar" D0 F0:1  ; drive + fans — extrusion only, no heaters
+M563 P1 S"Barrel" H0      ; owns H0 (Top) only
+M563 P2 S"Nozzle" H1      ; owns H1 (Bottom) only
+M568 P1 A0 ; ensure barrel heater starts off
+M568 P2 A0 ; ensure nozzle heater starts off
 M302 P1                        ; allow extrusion regardless of temperature
 
 M584                         ; no axes defined

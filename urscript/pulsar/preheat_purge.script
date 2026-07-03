@@ -1,0 +1,116 @@
+# Pulsar Preheat + Purge — standalone, BLOCKING. Run ONCE before a job.
+#
+# This is the deliberately-blocking half of the split. Preheat and purge
+# take minutes and it's fine (correct, even) for the operator to wait on
+# them — so they live here, OUT of the live print program. Run this on
+# the pendant first; once it reports "Ready", the heaters are at temp and
+# the screw is primed. The main print program (Pulsar Setup / Start /
+# Layer / Stop) then assumes that's already happened and never blocks.
+#
+# Self-contained: it inlines the handful of helpers it needs so it can be
+# pasted into a Script Code node on its own, exactly like debug_harness.
+#
+# Leaves the heaters ON and the socket CLOSED. The print program reopens
+# its own socket in Pulsar Setup. Heaters hold at their active temps
+# between this routine and the job, so don't leave a long gap.
+
+def Program():
+
+  # ---------------- SETTINGS ----------------
+
+  ip = "172.22.22.100"
+  port = 23
+
+  # PETG. Barrel = H0 ("Top", feed zone). Nozzle = H1 ("Bottom", exit).
+  barrel = 215
+  nozzle = 245
+
+  # Purge: mm of E to push through, and the feed to do it at. Tune so
+  # the screw runs long enough to flush cold/degraded material and show
+  # clean flow.
+  purge_mm   = 200
+  purge_feed = 300
+
+  # ---------------- HELPERS ----------------
+
+  def duet_open(ip, port):
+    socket_open(ip, port, "duet")
+    sleep(0.2)
+  end
+
+  def duet_close():
+    socket_close("duet")
+  end
+
+  def duet_send_line_and_read(line, timeout):
+    socket_send_line(line, "duet")
+    sleep(0.05)
+    resp = socket_read_string("duet", "", "", False, timeout)
+    return resp
+  end
+
+  # Byte-built M98 call (Polyscope 5.11 doesn't honour \" in a literal),
+  # then block for the reply. RRF withholds "ok" until the whole macro —
+  # including a blocking M116 (preheat) or M400 (purge) inside it — has
+  # finished, which is how these steps block without any polling.
+  def duet_send_m98_and_read(filename, params, timeout):
+    socket_send_string("M98 P", "duet")
+    socket_send_byte(34, "duet")
+    socket_send_string("0:/macros/", "duet")
+    socket_send_string(filename, "duet")
+    socket_send_byte(34, "duet")
+    socket_send_string(params, "duet")
+    socket_send_byte(10, "duet")
+    sleep(0.05)
+    resp = socket_read_string("duet", "", "", False, timeout)
+    return resp
+  end
+
+  def duet_send_m98(filename, params):
+    socket_send_string("M98 P", "duet")
+    socket_send_byte(34, "duet")
+    socket_send_string("0:/macros/", "duet")
+    socket_send_string(filename, "duet")
+    socket_send_byte(34, "duet")
+    socket_send_string(params, "duet")
+    socket_send_byte(10, "duet")
+  end
+
+  def show_temp():
+    resp = duet_send_line_and_read("M105", 2.0)
+    popup("Temp:" + resp, title="PreheatPurge", warning=False, error=False, blocking=True)
+  end
+
+  # ---------------- EXECUTION ----------------
+
+  popup("1/6  Connect to Duet at " + ip, title="PreheatPurge", warning=False, error=False, blocking=True)
+  duet_open(ip, port)
+
+  popup("2/6  Handshake (M115)", title="PreheatPurge", warning=False, error=False, blocking=True)
+  resp = duet_send_line_and_read("M115", 2.0)
+  if (resp == ""):
+    popup("ERROR: no response from Duet. Check IP / cable / firmware.", title="Fatal", warning=False, error=True, blocking=True)
+    halt
+  end
+
+  popup("3/6  Clear heater faults", title="PreheatPurge", warning=False, error=False, blocking=True)
+  duet_send_m98("pulsar_clear_faults.g", "")
+  sleep(0.1)
+
+  popup("4/6  Preheat (BLOCKING) barrel=" + to_str(barrel) + " nozzle=" + to_str(nozzle) + ". Several minutes from cold — the next popup won't appear until the Duet confirms both zones at temp.", title="PreheatPurge", warning=False, error=False, blocking=True)
+  resp = duet_send_m98_and_read("pulsar_preheat.g", " B" + to_str(barrel) + " N" + to_str(nozzle), 900.0)
+  if (resp == ""):
+    popup("WARNING: preheat timed out. Check heaters, thermistors, M570.", title="PreheatPurge", warning=True, error=False, blocking=True)
+  end
+  show_temp()
+
+  popup("5/6  Purge (BLOCKING): " + to_str(purge_mm) + " mm at F" + to_str(purge_feed) + ". Waits until the purge move completes. Watch for clean flow.", title="PreheatPurge", warning=False, error=False, blocking=True)
+  duet_send_m98_and_read("pulsar_purge.g", " E" + to_str(purge_mm) + " F" + to_str(purge_feed), 300.0)
+  show_temp()
+
+  popup("6/6  Preheat + purge complete. Heaters left ON. Close socket and run the print program.", title="PreheatPurge", warning=False, error=False, blocking=True)
+  duet_close()
+
+end
+
+Program()

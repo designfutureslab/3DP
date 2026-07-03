@@ -1,10 +1,13 @@
 # Pulsar Start — operator gate, begin extrusion.
 #
 # Paste after the initial home movej, BEFORE the first print move.
-# The temperature wait already happened in Pulsar Setup (pulsar_preheat
-# blocks). The popup here is the final "I've checked the machine"
-# operator gate before the screw starts turning.
+# Preheat + purge already happened in the separate preheat_purge routine,
+# so this is just the final "I've checked the machine" operator gate
+# before the screw starts turning.
+#
+# 600 = starting feed (mm/min = screw speed = deposition rate) for PETG.
+# Change it live during the print with pulsar_set_rate(<feed>).
 
 popup("Press Ready to start your print", title="Operator_Safety", warning=False, error=False, blocking=True)
 
-pulsar_start_extrusion(900, 100)
+pulsar_start_extrusion(600)

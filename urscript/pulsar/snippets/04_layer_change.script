@@ -1,14 +1,17 @@
 # Pulsar layer change
 #
-# Stop the bead, retract, do the UR travel move, unretract, resume flow.
-# The screw is still spinning behind the M221 S0 — flow modulation, not
-# motor stop, is the cleanest way to break the bead between layers.
+# Pause the screw, do the UR travel move, resume. pulsar_pause() stops
+# the daemon feeding chunks so the screw halts within ~one chunk — that's
+# what breaks the bead between layers. No retract: on a screw extruder a
+# few mm of E-retract does little against the melt volume, and skipping
+# it keeps the layer change fast.
+#
+# Keep the travel move short — the barrel is still full and hot, so long
+# dwells between beads risk ooze even with the screw stopped.
 
-pulsar_flow_off()
-pulsar_retract(3.0, 600)
+pulsar_pause()
 
 # --- UR travel move(s) here ---
 # e.g. movel(p[..], a=1.0, v=0.05, r=0)
 
-pulsar_unretract(3.0, 600)
-pulsar_flow_on(100)
+pulsar_resume()

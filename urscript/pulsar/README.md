@@ -7,26 +7,40 @@ is now a thin wrapper around Duet-side macros invoked via `M98`.
 
 ## Architecture
 
-The UR robot owns motion. The Duet owns extrusion. They communicate over
-TCP/23 (Telnet) with a small set of `M98` calls — start, stop, flow,
-retract, preheat. A background daemon on the Duet keeps the screw
-turning while a `pulsar_running` flag is set; the UR doesn't have to
-think about move-duration limits or top-up timing.
+The UR robot owns motion. The Duet owns extrusion. A background daemon on
+the Duet keeps the screw turning by feeding it **short** `G1 E` chunks
+while `pulsar_running` is set. The live print program never blocks:
+
+- **Preheat + purge** are the only blocking steps, and they've been
+  split out into a separate routine (`preheat_purge.script`) the operator
+  runs **once before** the job. The print program assumes they've been
+  done.
+- **Live control** (rate, pause, resume) is done by setting Duet globals
+  directly over Telnet — `set global.pulsar_feed = …` and
+  `set global.pulsar_running = …`. These are immediate meta-commands, so
+  the screw responds within ~one chunk (~0.3–0.8 s), fire-and-forget,
+  no socket read, no UR-side wait.
+
+Screw speed (`pulsar_feed`) IS the deposition rate on a single screw, so
+it's the flow knob — the old `M221` extrusion-factor path is retired
+because it lagged a whole queued chunk. See `/duet/README.md`
+"Responsiveness" for the stepper-vs-spindle reasoning.
 
 ```
                         Duet 3 / Pulsar Atom
                        ┌──────────────────────────────────────┐
-   UR5 CB3             │ globals: pulsar_running, feed, chunk │
-   ┌──────┐            │                                      │
-   │  UR  │ ─telnet─►  │   M98 P"pulsar_start.g" F900 R100    │
-   │ URS  │  M98 only  │   → sets globals                     │
-   └──────┘            │                                      │
-                       │   0:/sys/daemon.g (background)       │
-                       │   ┌──────────────────────────────┐   │
-                       │   │ if pulsar_running:           │   │
-                       │   │   G1 E{chunk} F{feed}        │   │
-                       │   │   G4 S{dwell}                │   │
-                       │   └──────────────────────────────┘   │
+   UR5 CB3             │ globals: pulsar_running, feed, chunk  │
+   ┌──────┐            │                                       │
+   │  UR  │ ─telnet─►  │   M98 P"pulsar_start.g" F600          │
+   │ URS  │            │   set global.pulsar_feed = 350   (live)│
+   │      │            │   set global.pulsar_running = false   │
+   └──────┘            │                                       │
+                       │   0:/sys/daemon.g (background)        │
+                       │   ┌───────────────────────────────┐   │
+                       │   │ if pulsar_running & feed>0:   │   │
+                       │   │   G1 E{chunk} F{feed}  (short)│   │
+                       │   │   G4 S{chunk/feed*60*0.9}     │   │
+                       │   └───────────────────────────────┘   │
                        └──────────────────────────────────────┘
 ```
 
@@ -47,13 +61,14 @@ Detailed install + verification steps live in `/duet/README.md`.
 | File | Purpose |
 |---|---|
 | `lib_pulsar.script` | Function library only — no execution. Inline into a `Program()` block, or paste into a Grasshopper-emitted script. |
-| `debug_harness.script` | Standalone runnable program. Steps through every helper with popups. Use this on the robot to validate the workflow before wiring up Grasshopper. |
+| `preheat_purge.script` | **Standalone, BLOCKING.** Run once on the pendant before a job: handshake, preheat (blocks on `M116`), purge (blocks on `M400`). Leaves heaters on. Keeps all the multi-minute waits out of the live print program. |
+| `debug_harness.script` | Standalone runnable program. Steps through every helper with popups (incl. a live rate-change and pause/resume test). Still does its own preheat+purge so it can run cold in one go. Use it to validate before wiring up Grasshopper. |
 | `grasshopper-integration.md` | **Map of GH Custom Command components** — Name, Declaration, and Command code for each insertion point. Read this when wiring the helpers into a GH-generated print program. |
-| `snippets/01_setup.script` | Pulsar Setup — connect + preheat (reference; GH guide is canonical). |
-| `snippets/02_start.script` | Pulsar Start — wait + popup + start extrusion. |
-| `snippets/03_pause.script` | Pulsar Pause — scripted mid-print pause for inserts/inspection. |
-| `snippets/04_layer_change.script` | Pulsar Pre/Post-Travel pair for layer changes. |
-| `snippets/05_stop.script` | Pulsar Stop — flow off, retract, daemon off, cooldown. No popup. |
+| `snippets/01_setup.script` | Pulsar Setup — connect + handshake only (preheat/purge are done beforehand by `preheat_purge.script`). Non-blocking. |
+| `snippets/02_start.script` | Pulsar Start — operator popup + start extrusion at a feed. |
+| `snippets/03_pause.script` | Pulsar Pause — pause the screw for inserts/inspection, resume on OK. |
+| `snippets/04_layer_change.script` | Pulsar layer change — pause / travel / resume. |
+| `snippets/05_stop.script` | Pulsar Stop — pause, daemon off, cooldown. No popup. |
 | `snippets/06_end.script` | Pulsar End — operator popup + close socket. |
 
 ## Function reference
@@ -85,58 +100,72 @@ Detailed install + verification steps live in `/duet/README.md`.
 ### Extrusion
 | Function | Wraps | Purpose |
 |---|---|---|
-| `pulsar_start_extrusion(feed, flow)` | `M98 P"pulsar_start.g" F<feed> R<flow>` | Start the daemon — screw begins turning. |
-| `pulsar_flow_on(flow)` | `M98 P"pulsar_flow.g" S<flow>` | Set M221 flow %. |
-| `pulsar_flow_off()` | `M98 P"pulsar_flow.g" S0` | M221 S0 — bead off, daemon keeps queueing. |
-| `pulsar_retract(mm, feed)` | `M98 P"pulsar_retract.g" S<mm> F<feed>` | Relative-E retract. |
-| `pulsar_unretract(mm, feed)` | `M98 P"pulsar_unretract.g" S<mm> F<feed>` | Relative-E unretract. |
-| `pulsar_stop_extrusion()` | `M98 P"pulsar_stop.g"` | Clear pulsar_running, zero flow, release motor. |
+| `pulsar_purge(mm, feed)` | `M98 P"pulsar_purge.g" E<mm> F<feed>` | **Blocking** prime. Used only by `preheat_purge.script`, before a job. |
+| `pulsar_start_extrusion(feed)` | `M98 P"pulsar_start.g" F<feed>` | Start the daemon — screw begins turning at `feed`. |
+| `pulsar_set_rate(feed)` | `set global.pulsar_feed = <feed>` | **Live** rate/flow (screw speed). Immediate, fire-and-forget, ~1 chunk latency. |
+| `pulsar_pause()` | `set global.pulsar_running = false` | **Live** pause — screw stops within ~1 chunk. |
+| `pulsar_resume()` | `set global.pulsar_running = true` | **Live** resume at the current rate. |
+| `pulsar_flow_off()` / `pulsar_flow_on(f)` | → `pulsar_pause()` / `pulsar_resume()` | Legacy aliases (flow % is no longer meaningful). Prefer pause/resume/set_rate. |
+| `pulsar_stop_extrusion()` | `M98 P"pulsar_stop.g"` | Clear pulsar_running, release motor. |
 
-## Default parameters (PLA baseline)
+### Retract (available, not used by the live flow)
+| Function | Wraps | Purpose |
+|---|---|---|
+| `pulsar_retract(mm, feed)` | `M98 P"pulsar_retract.g" S<mm> F<feed>` | Relative-E retract. Largely inert on a screw; kept for experimentation. |
+| `pulsar_unretract(mm, feed)` | `M98 P"pulsar_unretract.g" S<mm> F<feed>` | Relative-E unretract. |
+
+## Default parameters (PETG baseline)
 
 | Parameter | Value | Notes |
 |---|---|---|
-| Barrel zone (H0, "Top") | 190 °C | feed / compression. PLA values; for PETG try 220 °C. |
-| Nozzle zone (H1, "Bottom") | 215 °C | metering / exit. PLA values; for PETG try 245 °C. |
-| UR motion speed | 0.035 m/s | ≈ 35 mm/s |
-| Layer height | 1.0 mm | |
-| Bead width | 2.5 mm | |
-| Volumetric flow | ≈ 90 mm³/s | layer × width × speed |
-| Throughput | ≈ 400 g/h | at material density ≈ 1.25 g/cm³ |
-| Retract | 3 mm @ 600 mm/min | |
-| Feed (`F`) | 900 mm/min | screw rate; tune to match volumetric target |
-| Chunk (`pulsar_chunk`) | 1000 mm | daemon-side; ≈ 67 s of extrusion at F900 |
-| Initial flow (`M221 S`) | 100 % | per-layer trim with `M221` |
+| Barrel zone (H0, "Top") | 215 °C | feed / compression zone. |
+| Nozzle zone (H1, "Bottom") | 245 °C | metering / exit zone. |
+| UR motion speed | 0.035 m/s | ≈ 35 mm/s; tune with feed. |
+| Feed (`pulsar_feed`) | 600 mm/min | screw rate = deposition rate; PETG "usable" from pellet calibration (stall ~720). |
+| Chunk (`pulsar_chunk`) | 5 mm | daemon-side; ~0.5 s/chunk at F600 → ~0.3–0.8 s live-control latency. |
 
-The continuous chunks emitted by the daemon don't encode volumetric flow
-directly — they encode screw speed via the extruder's steps/mm
-calibration. Calibrate `feed` empirically against the 90 mm³/s target by
-weighing extrudate over a fixed time at flow 100 %.
+Screw speed (`pulsar_feed`) is the volumetric rate — there's no separate
+flow multiplier any more. Calibrate `feed` against your target bead by
+weighing extrudate over a fixed time, or from the pellet-calibration
+suite in `gcode-tests/pellet-calibration/`.
 
 ## Workflow
 
-1. **Bench-test** with `debug_harness.script` running directly on the
-   UR. Step through every popup, watching the Pulsar respond at each
-   stage.
-2. **Print** by chaining: `01_setup` → `02_start` → motion + per-layer
-   `04_layer_change` pairs (and `03_pause` where needed) → `05_stop` →
+1. **Preheat + purge once**, up front, with `preheat_purge.script` on the
+   pendant. Wait for it to report Ready. This is the only place the
+   operator waits on the machine.
+2. **Bench-test** the live path with `debug_harness.script` (it runs its
+   own preheat+purge so you can test cold in one go) — watch the live
+   rate-change and pause/resume steps respond within a fraction of a
+   second.
+3. **Print** by chaining: `01_setup` → `02_start` → motion + per-layer
+   `04_layer_change` (and `03_pause` where needed) → `05_stop` →
    `06_end`, all generated by Grasshopper. See `grasshopper-integration.md`
    for the canonical Custom Command layout.
 
-## Ready-signal pattern
+## Preheat/purge split & the blocking model
 
-Preheat is **socket-blocking**, not DIO-gated. RRF doesn't send its
-Telnet "ok" reply until the whole macro — including the blocking
-`M116` inside `pulsar_preheat.g` — has finished, so a single blocking
-read on the UR side is enough to guarantee both zones are genuinely at
-temperature. No polling loop, no operator judgement call about whether
-DWC "looks close enough".
+The multi-minute waits (preheat, purge) are **socket-blocking** and live
+only in `preheat_purge.script`, run once before the job. RRF doesn't send
+its Telnet "ok" until the whole macro — including the blocking `M116`
+(at temp) or `M400` (purge done) inside it — has finished, so a single
+blocking read guarantees the step genuinely completed. No polling, no
+"does DWC look close enough" judgement call.
+
+The **live** print program never blocks: it opens a socket, then drives
+everything with fire-and-forget global sets (`pulsar_set_rate`,
+`pulsar_pause`, `pulsar_resume`), which return no reply to wait on.
 
 ```
-pulsar_preheat(190, 215)                # BLOCKS until both zones at temp
-pulsar_show_temp()                      # report the actual reading
-popup("Press Ready to start", ...)      # operator gate (GH-emitted)
-pulsar_start_extrusion(900, 100)        # daemon takes over
+# once, beforehand (preheat_purge.script):
+pulsar_preheat(215, 245)                # BLOCKS until both zones at temp
+pulsar_purge(200, 300)                  # BLOCKS until purge move done
+
+# live program:
+pulsar_start_extrusion(600)             # screw runs continuously
+pulsar_set_rate(350)                    # live rate change (~1 chunk)
+pulsar_pause()                          # live pause (~1 chunk)
+pulsar_resume()
 ```
 
 `wait_for_pulsar_enabled(debug, pin)` still exists in the library but
@@ -171,13 +200,14 @@ operator popup + start are in **Pulsar Start** — see
 | `echo global.pulsar_running` returns nothing | `pulsar_init.g` not called from `config.g` | Add `M98 P"pulsar_init.g"` to `config.g` and reboot. |
 | Robot reaches preheat but Pulsar doesn't heat | Heater fault latched | Call `pulsar_clear_heater_faults()` before `pulsar_preheat()`. |
 | `pulsar_preheat()` pops the 15-min timeout warning | Heater hardware fault, thermistor disconnected, or M116 not reaching tolerance | Check Duet web UI; clear faults; verify wiring; check `M116` tolerance in RRF. |
-| Preheat sets both zones to the same (usually the nozzle) temperature | RRF's `M568 S<a>:<b>` colon-list drops the second value when built from expression substitution | Already fixed in `pulsar_preheat.g` — it assigns `tools[0].active[i]` / `standby[i]` per index instead of using the colon-list. If you see this again, check the macro hasn't reverted. |
+| Preheat sets both zones to the same temperature | A heater that belongs to a multi-heater tool broadcasts any scalar-`S` command to every heater the tool owns (confirmed with `G10`, `M568`, and bare `M104 H<n>` — see `duet/README.md` "Why each heater has its own tool, set via M568 not G10") | Fixed by giving each zone its own single-heater tool (tool 1 = barrel/`H0`, tool 2 = nozzle/`H1`); `pulsar_preheat.g` uses `M568 P1 ... A2` / `M568 P2 ... A2`. If you see this again, check nobody merged the heaters back onto one tool. |
+| Preheat popup returns instantly, "reported temps" popup comes back blank, no error anywhere | Heater target was set but the heater is still in **standby** state, not active — `G10` only writes target values, it doesn't change heater state, so `M116` sees nothing pending | Use `M568 Pn S<n> R<n> A2` instead of `G10`. The `A2` explicitly activates the heater; `A0` turns it off (used in `pulsar_cooldown.g`). |
 | One zone overshoots target by >10 °C while the other holds | PID untuned for that heater, or thermistor / heater wiring swapped | Run `M303 H<n> S<target>` with the barrel empty. Verify each `Hn` drives the right physical zone via isolation test (see commit history). |
-| Screw stalls briefly every minute | `pulsar_dwell` too long | From DWC console: `set global.pulsar_dwell = <smaller>`. Recover stable value, then update the default in `pulsar_init.g`. |
-| "Move duration too long" reappears | `pulsar_chunk` too large for current feed | Lower `global.pulsar_chunk` (default 1000 should be safe for F up to ~9000). |
-| Bead too thin | Flow % too low, or feed too low, or motion too fast | Raise `M221 S`, raise `feed`, or slow UR motion. |
-| Bead too thick | Inverse of above. | |
-| Stringing between layers | Retract too small or unretract too soon | Increase `retract_mm`; lift Z before unretract. |
+| Flow / pause changes lag by seconds-to-a-minute | `pulsar_chunk` too large — control waits out the in-flight move | Lower `global.pulsar_chunk` (default 5). This is the whole responsiveness lever; see `duet/README.md` "Responsiveness". |
+| Screw stutters / bead pulses | Chunk so small the stop-start between chunks shows | Raise `pulsar_chunk` a little, or smooth transitions with `M566` (jerk) / `M201` (accel). |
+| "Move duration too long" reappears | `pulsar_chunk` too large for current feed | Lower `global.pulsar_chunk`. |
+| Screw won't turn after a rate change | `pulsar_feed` was set to 0 (daemon skips the chunk — it needs feed > 0) | Set a positive `pulsar_feed`; pause via `pulsar_running`, never via feed 0. |
+| Bead too thin / thick | Feed (screw speed) too low / high, or motion too fast / slow | Adjust `pulsar_set_rate(<feed>)` or UR motion speed. |
 | `socket_open` returns true but no comms | Cable, IP mismatch, or firewall | Run `duet_handshake()` after open and verify `M115` response. |
 
 ## CB3 / URScript constraints
@@ -191,12 +221,22 @@ operator popup + start are in **Pulsar Start** — see
 
 ## RepRapFirmware notes
 
-- The tool definition `M563 P0 D0 H1:0` means tool 0's heaters are
-  ordered `[H1, H0]`. Position 0 in the colon-list is H1 (nozzle);
-  position 1 is H0 (barrel). `pulsar_preheat.g` knows this and
-  constructs `M568` accordingly.
+- Each heater has its own tool — tool 0 (drive `D0` + fans, no heaters),
+  tool 1 (`H0`, barrel), tool 2 (`H1`, nozzle). `pulsar_preheat.g`
+  addresses them with `M568 P1 ... A2` / `M568 P2 ... A2`, not `G10` —
+  `G10` only sets target values, `M568`'s `A` parameter is what actually
+  activates the heater without needing to T-select the tool first. See
+  `duet/README.md` for the full history of why.
 - After the cs1↔cs2 swap in `M308`, H0 is the **Top / barrel / feed**
   zone and H1 is the **Bottom / nozzle / metering** zone.
-- `M221 S0` is "no flow" — the daemon keeps queueing chunks, the
-  multiplier just pins the screw speed at 0. The pellet screw stops
-  cleanly without disturbing the move queue.
+- Rate/pause are done by setting `global.pulsar_feed` /
+  `global.pulsar_running` directly over Telnet, not by `M221`. RRF runs a
+  `set global.…` immediately (it's a meta-command, not queued motion), so
+  it lands within one daemon iteration. `M221` was dropped from the live
+  path because it only affects moves planned *after* it, so it lagged a
+  whole queued chunk.
+- The screw is a **stepper** (`M584 E0.1`), so it only turns while `G1 E`
+  moves feed it — hence the short-chunk daemon. A true "always spinning,
+  set the RPM" spindle (`M3 S<rpm>`) needs a spindle-type motor/driver,
+  which is how commercial pellet rigs get genuinely instant control; a
+  Duet stepper can't do that, so short chunks are the ceiling here.
