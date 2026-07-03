@@ -24,7 +24,7 @@ periodically. Moving the keep-it-spinning logic onto the Duet:
 | `sys/config.g` | `0:/sys/config.g` | Reference copy of the live Duet config. Includes the `M98 P"pulsar_init.g"` hook. Not auto-deployed — the Duet has its own working copy. |
 | `sys/daemon.g` | `0:/sys/daemon.g` | Background loop. RRF auto-runs while booted. |
 | `sys/pulsar_init.g` | `0:/sys/pulsar_init.g` | Declares the four globals the daemon reads. Called once from `config.g`. |
-| `macros/pulsar_preheat.g` | `0:/macros/pulsar_preheat.g` | Set both zone targets, block until reached. Sets each heater's active/standby setpoint individually via the object model (`tools[0].active[i]`) rather than `M568`'s `S<a>:<b>` colon-list — the colon-list was observed dropping the second value when built from expression substitution, sending both zones to the same temperature. |
+| `macros/pulsar_preheat.g` | `0:/macros/pulsar_preheat.g` | Set both zone targets via `G10 P0 S<n>:<b> R<n>:<b>`, block until reached with `M116`. Echoes the parsed temps to the console. (Object-model writes like `set tools[0].active[i]` do NOT work — the OM is read-only from meta-commands. An earlier `M568` colon-list attempt was reported sending both zones to one value; if `G10` shows the same, see the note below.) |
 | `macros/pulsar_start.g` | `0:/macros/pulsar_start.g` | Begin continuous extrusion. Sets `pulsar_running = true`. |
 | `macros/pulsar_stop.g` | `0:/macros/pulsar_stop.g` | Clear `pulsar_running`, zero flow, release motor. |
 | `macros/pulsar_flow.g` | `0:/macros/pulsar_flow.g` | `M221 S<percent>` — modulate flow without stopping the screw. |

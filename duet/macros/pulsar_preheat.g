@@ -12,14 +12,15 @@
 ; Tool 0's heater order per `M563 P0 ... H1:0`:
 ;   position 0 = H1 (nozzle)
 ;   position 1 = H0 (barrel)
+; So the colon-list order for S/R is  <nozzle>:<barrel>.
 ;
-; NOTE ON SETPOINT DELIVERY — we set active/standby setpoints directly
-; on the tool object rather than via M568's colon-list `S<a>:<b>` form.
-; With expression substitution, RRF's parser was observed to drop the
-; second value and set both heaters to the first (barrel and nozzle
-; both ended up at whatever the first slot's target was). Assigning
-; tools[0].active[i] and tools[0].standby[i] one index at a time
-; sidesteps that entirely.
+; Object-model writes (set tools[0].active[i] = ...) do NOT work — the
+; RRF object model is read-only from meta-commands, so those lines threw
+; and the macro aborted before heating anything. Back to G10, which is
+; RRF's canonical "set this tool's heater temps" command.
+;
+; The echo line reports what we actually parsed so the DWC console shows
+; the two values — a quick check that B and N came through distinct.
 ;
 ; Blocks via M116 until every heater on tool 0 is within tolerance.
 ;
@@ -32,12 +33,10 @@ if exists(param.B)
 if exists(param.N)
   set var.nozzle = param.N
 
-set tools[0].active[0]  = var.nozzle
-set tools[0].active[1]  = var.barrel
-set tools[0].standby[0] = var.nozzle
-set tools[0].standby[1] = var.barrel
+echo "pulsar_preheat: nozzle(H1)=" ^ var.nozzle ^ " barrel(H0)=" ^ var.barrel
 
-M568 P0 A2
+T0
+G10 P0 S{var.nozzle}:{var.barrel} R{var.nozzle}:{var.barrel}
 M116 P0
 
 ; Signal the UR that we're at temp. Will no-op until the DIO line is
