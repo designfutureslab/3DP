@@ -97,19 +97,21 @@ M106 P1 S1 L0 X1 B0.1 ; configure fan #1
 ;    DWC Tools row showed the heater as "n/a" and neither zone heated.
 ;    Heaters that belong to no tool never enter the "active" state on
 ;    this firmware.
+; 3. Gave each zone its own single-heater tool, set via G10 Pn Sn Rn —
+;    but G10 only writes target values, it doesn't change the heater's
+;    off/standby/active state. Without T-selecting the tool, the heater
+;    sat in standby: M116 Pn saw nothing pending and returned instantly.
 ;
-; Fix: give each zone its OWN single-heater tool. Tool 0 keeps the
-; extruder drive + fans for extrusion (T0, unrelated to heating). Tools
-; 1 and 2 exist purely so RRF has a tool to drive each heater's active
-; state through — since each owns exactly one heater, there's nothing
-; for a scalar S to broadcast across. Addressed via G10 P1/P2, which
-; works without ever T-selecting tool 1 or 2 (same pattern multi-nozzle
-; RRF machines use to preheat a tool that isn't currently active).
+; Fix: same one-heater-per-tool split, but set/activate via M568 Pn ...
+; A2 instead of G10 — the A parameter explicitly forces "active" state
+; without needing to T-select the tool. Safe here (no broadcast risk)
+; because each tool owns exactly one heater. Tool 0 keeps the extruder
+; drive + fans for extrusion (T0, unrelated to heating).
 M563 P0 S"Pulsar" D0 F0:1  ; drive + fans — extrusion only, no heaters
 M563 P1 S"Barrel" H0      ; owns H0 (Top) only
 M563 P2 S"Nozzle" H1      ; owns H1 (Bottom) only
-G10 P1 S-273.1 R-273.1 ; ensure barrel heater starts off
-G10 P2 S-273.1 R-273.1 ; ensure nozzle heater starts off
+M568 P1 A0 ; ensure barrel heater starts off
+M568 P2 A0 ; ensure nozzle heater starts off
 M302 P1                        ; allow extrusion regardless of temperature
 
 M584                         ; no axes defined

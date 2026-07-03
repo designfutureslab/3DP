@@ -19,11 +19,19 @@
 ; 3. Took H0/H1 off any tool, addressed via bare M104 Hn — commands
 ;    accepted with no error, but heaters never entered "active" state
 ;    and neither zone heated. Tool-less heaters don't activate.
+; 4. Each zone got its own single-heater tool, set via G10 Pn Sn Rn —
+;    G10 only writes the active/standby target *values*, it does not
+;    change which state (off/standby/active) the heater is in. Without
+;    T-selecting the tool, the heater sat in standby, M116 Pn saw
+;    nothing pending and returned instantly, and M105 reported nothing
+;    useful — matching the exact "instant popup, blank temp" symptom.
 ;
-; Fix: each zone now has its own single-heater tool (see config.g).
-; G10 Pn Sn addresses a tool's heater without needing to T-select it
-; first, and with only one heater per tool there's nothing to broadcast
-; across.
+; Fix: same single-heater-per-tool layout, but use M568 (not G10) —
+; its A2 parameter explicitly forces the heater into "active" state
+; without needing to T-select the tool, which is the one thing that
+; reliably activated heaters throughout this whole investigation. Safe
+; here because each tool owns exactly one heater, so there's still
+; nothing for the S/R values to broadcast across.
 ;
 ; The echo line reports what we actually parsed so the DWC console shows
 ; the two values — a quick check that B and N came through distinct.
@@ -41,8 +49,8 @@ if exists(param.N)
 
 echo "pulsar_preheat: nozzle(H1)=" ^ var.nozzle ^ " barrel(H0)=" ^ var.barrel
 
-G10 P1 S{var.barrel} R{var.barrel}
-G10 P2 S{var.nozzle} R{var.nozzle}
+M568 P1 S{var.barrel} R{var.barrel} A2
+M568 P2 S{var.nozzle} R{var.nozzle} A2
 M116 P1
 M116 P2
 

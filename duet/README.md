@@ -24,13 +24,13 @@ periodically. Moving the keep-it-spinning logic onto the Duet:
 | `sys/config.g` | `0:/sys/config.g` | Reference copy of the live Duet config. Includes the `M98 P"pulsar_init.g"` hook. Not auto-deployed — the Duet has its own working copy. |
 | `sys/daemon.g` | `0:/sys/daemon.g` | Background loop. RRF auto-runs while booted. |
 | `sys/pulsar_init.g` | `0:/sys/pulsar_init.g` | Declares the four globals the daemon reads. Called once from `config.g`. |
-| `macros/pulsar_preheat.g` | `0:/macros/pulsar_preheat.g` | Set both zone targets via `G10 P1 S<barrel>` / `G10 P2 S<nozzle>` (each zone's own single-heater tool), block until reached with `M116 P1` / `M116 P2`. Echoes the parsed temps to the console. See "Why each heater has its own tool" below for why. |
+| `macros/pulsar_preheat.g` | `0:/macros/pulsar_preheat.g` | Set + activate both zones via `M568 P1 S<barrel> R<barrel> A2` / `M568 P2 S<nozzle> R<nozzle> A2` (each zone's own single-heater tool), block until reached with `M116 P1` / `M116 P2`. Echoes the parsed temps to the console. See "Why each heater has its own tool" below for why. |
 | `macros/pulsar_start.g` | `0:/macros/pulsar_start.g` | Begin continuous extrusion. Sets `pulsar_running = true`. |
 | `macros/pulsar_stop.g` | `0:/macros/pulsar_stop.g` | Clear `pulsar_running`, zero flow, release motor. |
 | `macros/pulsar_flow.g` | `0:/macros/pulsar_flow.g` | `M221 S<percent>` — modulate flow without stopping the screw. |
 | `macros/pulsar_retract.g` | `0:/macros/pulsar_retract.g` | Relative-E retract. |
 | `macros/pulsar_unretract.g` | `0:/macros/pulsar_unretract.g` | Relative-E unretract. |
-| `macros/pulsar_cooldown.g` | `0:/macros/pulsar_cooldown.g` | Both zone heaters off (`G10 P1/P2 S-273.1`). |
+| `macros/pulsar_cooldown.g` | `0:/macros/pulsar_cooldown.g` | Both zone heaters off (`M568 P1/P2 A0`). |
 | `macros/pulsar_clear_faults.g` | `0:/macros/pulsar_clear_faults.g` | `M562` on both heaters. |
 | `macros/pulsar_signal_ready.g` | `0:/macros/pulsar_signal_ready.g` | Assert the Duet→UR "ready" DIO. Called automatically from `pulsar_preheat.g`. **Placeholder — uncomment the `M42` line once the wire is in place.** |
 | `macros/pulsar_signal_clear.g` | `0:/macros/pulsar_signal_clear.g` | Drop the Duet→UR "ready" DIO. Called automatically from `pulsar_stop.g` and `pulsar_cooldown.g`. Same `M42` placeholder. |
@@ -54,9 +54,9 @@ periodically. Moving the keep-it-spinning logic onto the Duet:
    - DWC's "Object Model" pane should show the daemon ticking (sleeping
      in its idle branch).
 
-## Why each heater has its own tool
+## Why each heater has its own tool, set via M568 not G10
 
-Three attempts, in order, all confirmed on hardware:
+Four attempts, in order, all confirmed on hardware:
 
 1. **Both heaters under tool 0's `H` list** (`M563 P0 ... H1:0`). Any
    command that set temperature with a single scalar `S` — `G10 P0 S<n>`,
@@ -71,18 +71,26 @@ Three attempts, in order, all confirmed on hardware:
    panel showed the heater as `n/a` and neither zone actually heated —
    heaters that belong to no tool don't enter the "active" state on this
    firmware.
-3. **Each heater gets its own single-heater tool** (current approach):
-   tool 0 owns the extruder drive (`D0`) and fans (`F0:1`) only; tool 1
-   owns just `H0` (barrel); tool 2 owns just `H1` (nozzle). `G10 P1 S<n>`
-   / `G10 P2 S<n>` set each zone without ever needing to `T`-select tool
-   1 or 2 — the same pattern multi-nozzle RRF machines use to preheat a
-   tool that isn't currently active. Because each tool owns exactly one
-   heater, there's nothing for a scalar `S` to broadcast across, and
-   because the heater *is* tool-owned, it activates the same way it did
-   in attempt 1.
+3. **Each heater got its own single-heater tool**, set via `G10 P1 S<n>`
+   / `G10 P2 S<n>`. Temperatures visibly changed this time, but the
+   heaters stayed in **standby** state — `G10` only writes the
+   active/standby target values, it doesn't change which state
+   (off/standby/active) the heater is actually in, and without
+   `T`-selecting the tool nothing switched it to active. Result: the
+   preheat popup returned instantly instead of blocking (`M116 P1`/`P2`
+   saw nothing pending), and the "reported temps" popup came back blank.
+4. **Same one-heater-per-tool split, but activate with `M568 ... A2`
+   instead of `G10`** (current approach). `M568`'s `A` parameter
+   explicitly forces the heater into active state without needing to
+   `T`-select the tool — this is the one thing that reliably activated
+   heaters throughout this whole investigation (see attempt 1, which
+   *did* heat, just to the wrong shared value). Safe here because each
+   tool owns exactly one heater, so there's still nothing for the `S`/`R`
+   values to broadcast across.
 
 If you ever merge `H0` and `H1` back onto one tool to "simplify," attempt
-1's bug comes back.
+1's bug comes back. If you ever swap `M568 ... A2` back for bare `G10`,
+attempt 3's "sets temp but never activates" bug comes back.
 
 ## Daemon globals
 

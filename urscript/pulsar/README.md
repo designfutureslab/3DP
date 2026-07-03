@@ -171,7 +171,8 @@ operator popup + start are in **Pulsar Start** — see
 | `echo global.pulsar_running` returns nothing | `pulsar_init.g` not called from `config.g` | Add `M98 P"pulsar_init.g"` to `config.g` and reboot. |
 | Robot reaches preheat but Pulsar doesn't heat | Heater fault latched | Call `pulsar_clear_heater_faults()` before `pulsar_preheat()`. |
 | `pulsar_preheat()` pops the 15-min timeout warning | Heater hardware fault, thermistor disconnected, or M116 not reaching tolerance | Check Duet web UI; clear faults; verify wiring; check `M116` tolerance in RRF. |
-| Preheat sets both zones to the same temperature | A heater that belongs to a multi-heater tool broadcasts any scalar-`S` command to every heater the tool owns (confirmed with `G10`, `M568`, and bare `M104 H<n>` — see `duet/README.md` "Why each heater has its own tool") | Fixed by giving each zone its own single-heater tool (tool 1 = barrel/`H0`, tool 2 = nozzle/`H1`); `pulsar_preheat.g` uses `G10 P1` / `G10 P2`. If you see this again, check nobody merged the heaters back onto one tool. |
+| Preheat sets both zones to the same temperature | A heater that belongs to a multi-heater tool broadcasts any scalar-`S` command to every heater the tool owns (confirmed with `G10`, `M568`, and bare `M104 H<n>` — see `duet/README.md` "Why each heater has its own tool, set via M568 not G10") | Fixed by giving each zone its own single-heater tool (tool 1 = barrel/`H0`, tool 2 = nozzle/`H1`); `pulsar_preheat.g` uses `M568 P1 ... A2` / `M568 P2 ... A2`. If you see this again, check nobody merged the heaters back onto one tool. |
+| Preheat popup returns instantly, "reported temps" popup comes back blank, no error anywhere | Heater target was set but the heater is still in **standby** state, not active — `G10` only writes target values, it doesn't change heater state, so `M116` sees nothing pending | Use `M568 Pn S<n> R<n> A2` instead of `G10`. The `A2` explicitly activates the heater; `A0` turns it off (used in `pulsar_cooldown.g`). |
 | One zone overshoots target by >10 °C while the other holds | PID untuned for that heater, or thermistor / heater wiring swapped | Run `M303 H<n> S<target>` with the barrel empty. Verify each `Hn` drives the right physical zone via isolation test (see commit history). |
 | Screw stalls briefly every minute | `pulsar_dwell` too long | From DWC console: `set global.pulsar_dwell = <smaller>`. Recover stable value, then update the default in `pulsar_init.g`. |
 | "Move duration too long" reappears | `pulsar_chunk` too large for current feed | Lower `global.pulsar_chunk` (default 1000 should be safe for F up to ~9000). |
@@ -193,9 +194,10 @@ operator popup + start are in **Pulsar Start** — see
 
 - Each heater has its own tool — tool 0 (drive `D0` + fans, no heaters),
   tool 1 (`H0`, barrel), tool 2 (`H1`, nozzle). `pulsar_preheat.g`
-  addresses them with `G10 P1` / `G10 P2`, which doesn't require
-  T-selecting tool 1 or 2 first. See `duet/README.md` for why they
-  aren't both under tool 0.
+  addresses them with `M568 P1 ... A2` / `M568 P2 ... A2`, not `G10` —
+  `G10` only sets target values, `M568`'s `A` parameter is what actually
+  activates the heater without needing to T-select the tool first. See
+  `duet/README.md` for the full history of why.
 - After the cs1↔cs2 swap in `M308`, H0 is the **Top / barrel / feed**
   zone and H1 is the **Bottom / nozzle / metering** zone.
 - `M221 S0` is "no flow" — the daemon keeps queueing chunks, the
