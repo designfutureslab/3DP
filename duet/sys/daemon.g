@@ -1,44 +1,47 @@
 ; daemon.g — Pulsar continuous-extrusion background task
 ;
-; RRF auto-runs this file in a loop. Each iteration completes, then RRF
-; restarts it. While global.pulsar_running is true, we queue one SHORT
-; extrusion chunk and dwell for slightly less than its execution time, so
-; the next chunk arrives just before the current one drains — the screw
-; runs continuously with only ~1 move queued ahead.
+; RRF auto-runs this file, but only re-invokes it every few seconds when
+; it returns quickly (observed ~5-6 s on Ric's Duet). Feeding ONE short
+; chunk per invocation therefore produced one blip every 5-6 s — a
+; stutter, not continuous motion. Fix: loop INTERNALLY here with a
+; `while`, so the screw is fed tightly regardless of how often RRF
+; re-invokes the file.
 ;
-; WHY SHORT CHUNKS (see pulsar_init.g / duet/README.md):
-;   The screw is a stepper — it only turns while G1 E moves feed it, so
-;   "always running" means "always being fed short moves". Keeping the
-;   move short and the queue ~1 deep is what makes live control fast:
-;   a change to global.pulsar_feed re-paces on the next iteration, and
-;   clearing global.pulsar_running pauses within ~one chunk instead of
-;   waiting out a long queued move. The robot sets those globals directly
-;   over Telnet (immediate meta-commands), so there's no M221/queue lag.
+; HOW IT WORKS
+;   While global.pulsar_running is true (and feed > 0), we sit in the
+;   while loop feeding one SHORT chunk per iteration, each followed by a
+;   dwell of 0.9 × the chunk's run-time. G1 returns as soon as the move
+;   is QUEUED, so chunk N+1 is queued while chunk N runs; the 0.9 factor
+;   keeps the queue ~1 move deep — continuous motion, no gap, but shallow
+;   enough that a pause/rate change bites within ~1 chunk.
 ;
-;   Dwell is computed here from chunk and feed every iteration rather
-;   than read from a stored global, so a live feed change stays paced.
-;   The 0.9 factor issues the next chunk just before the current one
-;   finishes (queue depth ~1, no gap → continuous motion).
+;   Live control still works from inside the loop:
+;   - global.pulsar_feed is re-read every iteration → a rate change over
+;     Telnet re-paces on the next chunk.
+;   - global.pulsar_running is re-checked every iteration → clearing it
+;     (the robot's pause/stop) exits the loop within ~1 chunk.
+;   Both are set directly over Telnet as meta-commands, processed on the
+;   Telnet channel concurrently with this daemon-channel loop.
 ;
-;   pulsar_feed must always be > 0 while running (it divides the dwell).
-;   Pause is done by clearing pulsar_running, never by setting feed to 0
-;   — so the running branch below only ever sees a positive feed. The
-;   guard `if global.pulsar_feed > 0` makes that explicit and dodges a
-;   divide-by-zero throw if a bad value ever slips through, without
-;   relying on a max()/min() meta builtin whose availability on this
-;   RRF build we haven't verified.
+;   When running is false we fall through to a short idle dwell and
+;   return; RRF re-invokes us a few seconds later and we idle again until
+;   running goes true.
 ;
-; Block terminator: dedent-based (RRF 3.6 on Ric's Duet rejects both
-; bare `end` and `endif` with "Bad command: X"). The else branch runs
-; to EOF, which implicitly closes the block.
+;   pulsar_feed must be > 0 while running (it divides the dwell). Pause
+;   is done by clearing pulsar_running, never by feed=0, so the loop
+;   only ever sees a positive feed. The `> 0` guard makes that explicit
+;   and dodges a divide-by-zero if a bad value slips through.
 ;
-; Tuning is held in globals (set by pulsar_init.g / pulsar_start.g):
-;   pulsar_running  — bool, true while the daemon should feed chunks
-;   pulsar_feed     — F-value (mm/min); the live rate/"flow" knob
-;   pulsar_chunk    — mm of E per chunk (short = more responsive)
+; Block terminators: dedent-based (RRF 3.6 on Ric's Duet rejects both
+; bare `end` and `endif`). The `G4 S0.2` at column 0 closes the while
+; loop; it runs once after the loop exits, then the file returns.
+;
+; Tuning globals (set by pulsar_init.g / pulsar_start.g):
+;   pulsar_running — bool, true while the daemon should feed chunks
+;   pulsar_feed    — F-value (mm/min); the live rate/"flow" knob
+;   pulsar_chunk   — mm of E per chunk (short = more responsive pause)
 
-if exists(global.pulsar_running) && global.pulsar_running && global.pulsar_feed > 0
+while exists(global.pulsar_running) && global.pulsar_running && global.pulsar_feed > 0
   G1 E{global.pulsar_chunk} F{global.pulsar_feed}
   G4 S{global.pulsar_chunk / global.pulsar_feed * 60 * 0.9}
-else
-  G4 S0.2
+G4 S0.2

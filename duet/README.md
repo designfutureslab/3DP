@@ -117,15 +117,31 @@ everything by setting Duet globals directly over Telnet:
 - **Pause / resume** — `set global.pulsar_running = false` / `true`.
 
 `set global.…` is an immediate meta-command (not queued motion), so RRF
-applies it at once; the daemon picks it up on its next iteration. With a
-5 mm chunk that's ~0.3–0.8 s end to end — the stepper ceiling. Drop
-`pulsar_chunk` toward 3 for snappier, raise it if the screw stutters.
+applies it at once; the daemon picks it up on its next loop iteration.
+With a 5 mm chunk that's ~0.3–0.8 s end to end — the stepper ceiling.
+Drop `pulsar_chunk` toward 3 for snappier, raise it if the screw
+stutters.
+
+### The daemon loops internally — don't rely on RRF re-invocation
+
+**Critical:** `daemon.g` must feed chunks from a `while` loop *inside*
+the file, not one chunk per invocation. RRF only re-invokes `daemon.g`
+every few seconds when it returns quickly (measured ~5–6 s on Ric's
+Duet). An earlier version fed a single chunk then returned, so the screw
+got one 5 mm blip every 5–6 s — a stutter that looked exactly like a
+low-feed problem but wasn't (feed was a correct 700). The `while` loop
+keeps the screw fed tightly regardless of RRF's re-invocation cadence,
+and re-reads `pulsar_feed` / `pulsar_running` each iteration so live
+control still bites within ~1 chunk. When `pulsar_running` goes false
+the loop exits, the file returns, and RRF re-invokes it a few seconds
+later to idle until the next run. If you ever refactor `daemon.g` back
+to "one chunk per invocation," the 5–6 s stutter returns.
 
 ### Daemon globals
 
 | Global | Default | Meaning |
 |---|---|---|
-| `pulsar_running` | `false` | While true, the daemon feeds one chunk per iteration. Clear it to pause. |
+| `pulsar_running` | `false` | While true, the daemon's internal `while` loop feeds one chunk per iteration. Clear it to pause (loop exits within ~1 chunk). |
 | `pulsar_feed` | `600` | F-value (mm/min) — the live rate knob. **Must stay > 0 while running** (the daemon divides the dwell by it; pause via the flag, never via feed 0). |
 | `pulsar_chunk` | `5` | mm of E per chunk. Short = responsive. |
 
