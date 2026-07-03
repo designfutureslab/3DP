@@ -9,20 +9,22 @@
 ; N = nozzle / metering zone target. Wired as heater H1 in config.g
 ;     (labelled "Bottom" — lower zone, closer to the nozzle).
 ;
-; Tool 0's heater order per `M563 P0 ... H1:0`:
-;   position 0 = H1 (nozzle)
-;   position 1 = H0 (barrel)
-; So the colon-list order for S/R is  <nozzle>:<barrel>.
-;
 ; Object-model writes (set tools[0].active[i] = ...) do NOT work — the
 ; RRF object model is read-only from meta-commands, so those lines threw
-; and the macro aborted before heating anything. Back to G10, which is
-; RRF's canonical "set this tool's heater temps" command.
+; and the macro aborted before heating anything.
+;
+; G10 P0 S<nozzle>:<barrel> was tried next (RRF's tool-level "set both
+; heater temps" command, using the H1:0 order from `M563 P0 ... H1:0`).
+; Confirmed on this Duet: the echo showed nozzle=215/barrel=190 parsed
+; correctly, but G10's colon list still broadcast 215 to both heaters —
+; so we stop trusting the tool-level colon list and address each heater
+; directly instead. M104 Hn Sn sets one heater's active temperature with
+; no tool/list ambiguity at all.
 ;
 ; The echo line reports what we actually parsed so the DWC console shows
 ; the two values — a quick check that B and N came through distinct.
 ;
-; Blocks via M116 until every heater on tool 0 is within tolerance.
+; Blocks via M116 until both heaters are within tolerance.
 ;
 ; Block terminators: dedent-based (RRF 3.6 rejects `end` and `endif`).
 
@@ -35,9 +37,10 @@ if exists(param.N)
 
 echo "pulsar_preheat: nozzle(H1)=" ^ var.nozzle ^ " barrel(H0)=" ^ var.barrel
 
-T0
-G10 P0 S{var.nozzle}:{var.barrel} R{var.nozzle}:{var.barrel}
-M116 P0
+M104 H0 S{var.barrel}
+M104 H1 S{var.nozzle}
+M116 H0
+M116 H1
 
 ; Signal the UR that we're at temp. Will no-op until the DIO line is
 ; wired and the M42 in pulsar_signal_ready.g is uncommented. Absolute
