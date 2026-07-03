@@ -110,8 +110,12 @@ M106 P1 S1 L0 X1 B0.1 ; configure fan #1
 M563 P0 S"Pulsar" D0 F0:1  ; drive + fans — extrusion only, no heaters
 M563 P1 S"Barrel" H0      ; owns H0 (Top) only
 M563 P2 S"Nozzle" H1      ; owns H1 (Bottom) only
-M568 P1 A0 ; ensure barrel heater starts off
-M568 P2 A0 ; ensure nozzle heater starts off
+; S0 R0 initialises the active/standby setpoints to 0 so a fresh boot
+; shows a clean "0 / 0" in DWC. Without them the setpoints default to
+; -273.15 ("unset"), which is harmless — pulsar_preheat overwrites them
+; — but looks alarming. A0 forces the heater to the off state.
+M568 P1 S0 R0 A0 ; barrel heater off, setpoints zeroed
+M568 P2 S0 R0 A0 ; nozzle heater off, setpoints zeroed
 M302 P1                        ; allow extrusion regardless of temperature
 
 M584                         ; no axes defined
