@@ -1,47 +1,43 @@
 ; daemon.g — Pulsar continuous-extrusion background task
 ;
-; RRF auto-runs this file, but only re-invokes it every few seconds when
-; it returns quickly (observed ~5-6 s on Ric's Duet). Feeding ONE short
-; chunk per invocation therefore produced one blip every 5-6 s — a
-; stutter, not continuous motion. Fix: loop INTERNALLY here with a
-; `while`, so the screw is fed tightly regardless of how often RRF
-; re-invokes the file.
+; RRF only re-invokes this file every few seconds when it returns, so we
+; loop INTERNALLY with a `while` to keep the screw fed tightly.
 ;
-; HOW IT WORKS
-;   While global.pulsar_running is true (and feed > 0), we sit in the
-;   while loop feeding one SHORT chunk per iteration, each followed by a
-;   dwell of 0.9 × the chunk's run-time. G1 returns as soon as the move
-;   is QUEUED, so chunk N+1 is queued while chunk N runs; the 0.9 factor
-;   keeps the queue ~1 move deep — continuous motion, no gap, but shallow
-;   enough that a pause/rate change bites within ~1 chunk.
+; NO DWELL BETWEEN CHUNKS. An earlier version put a `G4` dwell after each
+; chunk to "pace" the loop — but G4 is a QUEUED motion command, not a
+; wall-clock sleep, so it executed as a real stop after every chunk:
+; move 0.43 s / stop 0.39 s / move / stop … a visible ~1-2 Hz pulse in
+; the bead. Removing it lets consecutive G1 E moves blend in the planner
+; (same feed, same direction, within M566 E jerk) into ONE continuous
+; rotation — the way a normal print feeds thousands of extrusion moves
+; without stopping between them.
 ;
-;   Live control still works from inside the loop:
-;   - global.pulsar_feed is re-read every iteration → a rate change over
-;     Telnet re-paces on the next chunk.
-;   - global.pulsar_running is re-checked every iteration → clearing it
-;     (the robot's pause/stop) exits the loop within ~1 chunk.
-;   Both are set directly over Telnet as meta-commands, processed on the
-;   Telnet channel concurrently with this daemon-channel loop.
+; Pacing without a dwell: G1 returns as soon as the move is QUEUED, and
+; blocks only when RRF's look-ahead queue is full — so the loop
+; self-paces to the drain rate once the queue fills. No busy-spin, no CPU
+; peg, and the Telnet channel stays free so live `set global.…` commands
+; are still processed promptly.
 ;
-;   When running is false we fall through to a short idle dwell and
-;   return; RRF re-invokes us a few seconds later and we idle again until
-;   running goes true.
+; TRADE-OFF — because there's no dwell, the queue fills a few chunks deep,
+; so a pause / rate change / stop takes effect after the already-queued
+; chunks drain (queue depth × pulsar_chunk of extrusion). Keep pulsar_chunk
+; small to bound that: at chunk 2 mm the committed-ahead extrusion is only
+; a few cm. For vase mode (no mid-print pause) this is irrelevant; the
+; screw just runs smoothly Start→Stop. If you need tighter live control,
+; a queue-depth guard (feed only while move.queue depth < N) is the proper
+; fix — pending confirmation of the object-model field name on this RRF
+; build (run  M409 K"move.queue"  to inspect).
 ;
-;   pulsar_feed must be > 0 while running (it divides the dwell). Pause
-;   is done by clearing pulsar_running, never by feed=0, so the loop
-;   only ever sees a positive feed. The `> 0` guard makes that explicit
-;   and dodges a divide-by-zero if a bad value slips through.
+; Live control, re-read every iteration:
+;   pulsar_feed    — F-value (mm/min); the rate / "flow" knob
+;   pulsar_running — bool; clear it to pause (loop exits, screw coasts to
+;                    a stop once the queued chunks drain)
+;   pulsar_feed must be > 0 while running; the > 0 guard is belt-and-braces.
 ;
-; Block terminators: dedent-based (RRF 3.6 on Ric's Duet rejects both
-; bare `end` and `endif`). The `G4 S0.2` at column 0 closes the while
-; loop; it runs once after the loop exits, then the file returns.
-;
-; Tuning globals (set by pulsar_init.g / pulsar_start.g):
-;   pulsar_running — bool, true while the daemon should feed chunks
-;   pulsar_feed    — F-value (mm/min); the live rate/"flow" knob
-;   pulsar_chunk   — mm of E per chunk (short = more responsive pause)
+; Block terminators: dedent-based (RRF 3.6 rejects both bare `end` and
+; `endif`). The `G4 S0.2` at column 0 closes the while loop and runs once
+; after it exits (idle tick), then the file returns.
 
 while exists(global.pulsar_running) && global.pulsar_running && global.pulsar_feed > 0
   G1 E{global.pulsar_chunk} F{global.pulsar_feed}
-  G4 S{global.pulsar_chunk / global.pulsar_feed * 60 * 0.9}
 G4 S0.2
