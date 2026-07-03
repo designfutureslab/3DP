@@ -24,13 +24,13 @@ periodically. Moving the keep-it-spinning logic onto the Duet:
 | `sys/config.g` | `0:/sys/config.g` | Reference copy of the live Duet config. Includes the `M98 P"pulsar_init.g"` hook. Not auto-deployed — the Duet has its own working copy. |
 | `sys/daemon.g` | `0:/sys/daemon.g` | Background loop. RRF auto-runs while booted. |
 | `sys/pulsar_init.g` | `0:/sys/pulsar_init.g` | Declares the four globals the daemon reads. Called once from `config.g`. |
-| `macros/pulsar_preheat.g` | `0:/macros/pulsar_preheat.g` | Set both zone targets via `G10 P0 S<n>:<b> R<n>:<b>`, block until reached with `M116`. Echoes the parsed temps to the console. (Object-model writes like `set tools[0].active[i]` do NOT work — the OM is read-only from meta-commands. An earlier `M568` colon-list attempt was reported sending both zones to one value; if `G10` shows the same, see the note below.) |
+| `macros/pulsar_preheat.g` | `0:/macros/pulsar_preheat.g` | Set both zone targets directly via `M104 H0 S<barrel> `/ `M104 H1 S<nozzle>`, block until reached with `M116 H0` / `M116 H1`. Echoes the parsed temps to the console. See "Heaters are not tool members" below for why. |
 | `macros/pulsar_start.g` | `0:/macros/pulsar_start.g` | Begin continuous extrusion. Sets `pulsar_running = true`. |
 | `macros/pulsar_stop.g` | `0:/macros/pulsar_stop.g` | Clear `pulsar_running`, zero flow, release motor. |
 | `macros/pulsar_flow.g` | `0:/macros/pulsar_flow.g` | `M221 S<percent>` — modulate flow without stopping the screw. |
 | `macros/pulsar_retract.g` | `0:/macros/pulsar_retract.g` | Relative-E retract. |
 | `macros/pulsar_unretract.g` | `0:/macros/pulsar_unretract.g` | Relative-E unretract. |
-| `macros/pulsar_cooldown.g` | `0:/macros/pulsar_cooldown.g` | Both zone targets to 0, tool off. |
+| `macros/pulsar_cooldown.g` | `0:/macros/pulsar_cooldown.g` | Both zone heaters off (`M104 H0/H1 S-273.1`). |
 | `macros/pulsar_clear_faults.g` | `0:/macros/pulsar_clear_faults.g` | `M562` on both heaters. |
 | `macros/pulsar_signal_ready.g` | `0:/macros/pulsar_signal_ready.g` | Assert the Duet→UR "ready" DIO. Called automatically from `pulsar_preheat.g`. **Placeholder — uncomment the `M42` line once the wire is in place.** |
 | `macros/pulsar_signal_clear.g` | `0:/macros/pulsar_signal_clear.g` | Drop the Duet→UR "ready" DIO. Called automatically from `pulsar_stop.g` and `pulsar_cooldown.g`. Same `M42` placeholder. |
@@ -53,6 +53,26 @@ periodically. Moving the keep-it-spinning logic onto the Duet:
    - `echo global.pulsar_feed` should return `900`.
    - DWC's "Object Model" pane should show the daemon ticking (sleeping
      in its idle branch).
+
+## Heaters are not tool members
+
+`M563 P0 ...` deliberately has no `H<list>` parameter — tool 0 owns the
+extruder drive (`D0`) and fans (`F0:1`) but no heaters.
+
+Confirmed on hardware via `M409 K"heat.heaters"`: when a heater *is*
+listed under a tool's `H` param, any command that sets its temperature
+with a single scalar `S` — `G10 P0 S<n>`, `M568 P0 S<n>`, even
+`M104 H<n> S<n>` — gets routed through the tool and broadcasts that one
+value to *every* heater the tool owns, silently overwriting the other
+zone's target. This reproduced with two back-to-back bare `M104 H0 S150`
+/ `M104 H1 S170` commands (no macro, no colon-list): both heaters ended
+up at 170. A `G10 ...:...` colon-list was tried first and had the same
+symptom, one value winning over the other.
+
+Keeping the heaters off the tool makes them "free" heaters that
+`M104 H0` / `M104 H1` and `M116 H0` / `M116 H1` address independently,
+with no tool in the path to collapse them. If you ever add `H0:1` back
+to the `M563` line, this bug comes back.
 
 ## Daemon globals
 

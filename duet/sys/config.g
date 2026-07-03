@@ -86,8 +86,17 @@ M950 F1 C"out6" ; create fan #1
 M106 P1 S1 L0 X1 B0.1 ; configure fan #1
 
 ; Tools
-M563 P0 S"Pulsar" D0 H1:0 F0:1 ; create tool #0
-M568 P0 R0 S0 ; set initial tool #0 active and standby temperatures to 0C
+; H0/H1 deliberately NOT listed here (no H<list> param). Confirmed on
+; hardware via M409 K"heat.heaters": when a heater belongs to a tool,
+; any scalar-S command that touches it (G10, M104, M568 — doesn't
+; matter which) routes through the tool and broadcasts that one S value
+; to every heater the tool owns, silently overwriting the other zone's
+; target. Keeping the tool heater-less makes H0/H1 "free" heaters that
+; M104 H0/H104 H1 and M116 H0/M116 H1 in pulsar_preheat.g can address
+; independently, with no tool in the path to collapse them.
+M563 P0 S"Pulsar" D0 F0:1 ; create tool #0 — drive + fans only, no heaters
+M104 H0 S-273.1 ; ensure barrel heater starts off
+M104 H1 S-273.1 ; ensure nozzle heater starts off
 M302 P1                        ; allow extrusion regardless of temperature
 
 M584                         ; no axes defined
