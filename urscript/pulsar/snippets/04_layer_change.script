@@ -1,0 +1,14 @@
+# Pulsar layer change
+#
+# Stop the bead, retract, do the UR travel move, unretract, resume flow.
+# The screw is still spinning behind the M221 S0 — flow modulation, not
+# motor stop, is the cleanest way to break the bead between layers.
+
+pulsar_flow_off()
+pulsar_retract(3.0, 600)
+
+# --- UR travel move(s) here ---
+# e.g. movel(p[..], a=1.0, v=0.05, r=0)
+
+pulsar_unretract(3.0, 600)
+pulsar_flow_on(100)

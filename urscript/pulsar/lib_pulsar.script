@@ -1,0 +1,170 @@
+
+# Pulsar Atom + Duet 3 helper library for UR (CB3 & e-Series URScript)
+#
+# DAEMON ARCHITECTURE — all extrusion state lives on the Duet. This library
+# is now a thin wrapper that fires Duet-side macros via M98. The Duet's
+# `0:/sys/daemon.g` keeps the screw turning while `global.pulsar_running`
+# is true, so the UR no longer has to think about move-duration limits or
+# top-up timing.
+#
+# NOTE ON QUOTES — Polyscope's URScript does NOT reliably honour `\"` as
+# an escape for an embedded double-quote inside a string literal
+# (confirmed broken on 5.11.11 — parser fails at the first `\"`). RRF's
+# M98 requires quoted filenames, so we can't just drop the quotes.
+# Workaround: build every "M98 P\"filename\" ..." line byte-by-byte
+# using socket_send_byte(34, ...) for each `"` character. See
+# duet_send_m98() below.
+#
+# Required Duet-side setup (see /duet/ in this repo):
+#   - `0:/sys/daemon.g` and `0:/sys/pulsar_init.g` uploaded
+#   - `M98 P"pulsar_init.g"` added to `config.g`
+#   - All `0:/macros/pulsar_*.g` macros uploaded
+
+# ---------- low-level Duet I/O ----------
+
+def duet_open(ip, port):
+  socket_open(ip, port, "duet")
+  sleep(0.2)
+end
+
+def duet_close():
+  socket_close("duet")
+end
+
+def duet_send_line(line):
+  socket_send_line(line, "duet")
+end
+
+# Build and send an M98 macro call:  M98 P"0:/macros/<filename>"<params>\n
+#
+# Uses an absolute path because Ric's RRF 3.6 doesn't auto-search
+# 0:/macros/ from the console — only 0:/sys/ is on the default path.
+# Absolute paths sidestep the ambiguity everywhere.
+#
+# Quote characters go through socket_send_byte(34) because URScript's
+# \" escape isn't honoured on Polyscope 5.11.
+def duet_send_m98(filename, params):
+  socket_send_string("M98 P", "duet")
+  socket_send_byte(34, "duet")
+  socket_send_string("0:/macros/", "duet")
+  socket_send_string(filename, "duet")
+  socket_send_byte(34, "duet")
+  socket_send_string(params, "duet")
+  socket_send_byte(10, "duet")
+end
+
+def duet_send_line_and_read(line, timeout):
+  socket_send_line(line, "duet")
+  sleep(0.05)
+  resp = socket_read_string("duet", "", "", False, timeout)
+  return resp
+end
+
+# Same byte-built M98 call as duet_send_m98(), but blocks for a reply.
+# RRF doesn't send "ok" back over Telnet until the whole macro file —
+# including any blocking command inside it, e.g. pulsar_preheat.g's
+# M116 — has finished executing. So this is how we get a genuinely
+# blocking preheat without any polling from the UR side.
+def duet_send_m98_and_read(filename, params, timeout):
+  socket_send_string("M98 P", "duet")
+  socket_send_byte(34, "duet")
+  socket_send_string("0:/macros/", "duet")
+  socket_send_string(filename, "duet")
+  socket_send_byte(34, "duet")
+  socket_send_string(params, "duet")
+  socket_send_byte(10, "duet")
+  sleep(0.05)
+  resp = socket_read_string("duet", "", "", False, timeout)
+  return resp
+end
+
+# socket_open's return value is unreliable — verify connectivity by
+# sending M115 and checking a response came back.
+def duet_handshake(timeout):
+  resp = duet_send_line_and_read("M115", timeout)
+  if (resp != ""):
+    return True
+  end
+  return False
+end
+
+# ---------- Pulsar high-level functions ----------
+
+def pulsar_clear_heater_faults():
+  duet_send_m98("pulsar_clear_faults.g", "")
+  sleep(0.1)
+end
+
+# Set both zone targets and BLOCK until both heaters are at temp.
+# Blocking happens Duet-side via M116 inside pulsar_preheat.g — the UR
+# just waits on the socket reply, so there's no polling loop and no
+# operator judgement call about when it's "close enough". Timeout is
+# generous (15 min) because a cold barrel legitimately takes several
+# minutes; if it fires, something is actually wrong (heater fault,
+# thermistor fault, etc.) and we want to know.
+#
+# barrel = H0 ("Top"  label) — feed/compression zone
+# nozzle = H1 ("Bottom" label) — metering/exit zone
+def pulsar_preheat(barrel, nozzle):
+  resp = duet_send_m98_and_read("pulsar_preheat.g", " B" + to_str(barrel) + " N" + to_str(nozzle), 900.0)
+  if (resp == ""):
+    popup("WARNING: preheat timed out waiting for the Duet. Check heaters, thermistors and M570 config.", title="Debug", warning=True, error=False, blocking=True)
+  end
+  return resp
+end
+
+# Reserved for future Duet→UR safety signalling (e-stop / pause) once
+# a DIO line is wired between the two — see /duet/README.md. Not used
+# for temperature gating any more; pulsar_preheat() blocks on its own.
+#
+#   debug=True:  no-op, returns immediately.
+#   debug=False: poll UR digital input `pin` until it goes high.
+def wait_for_pulsar_enabled(debug, pin):
+  if (debug == False):
+    while (get_standard_digital_in(pin) == False):
+      sleep(0.5)
+    end
+  end
+end
+
+# Begin continuous extrusion via the Duet daemon. After this returns, the
+# screw is turning and the daemon will keep the move queue topped up.
+def pulsar_start_extrusion(feed, flow):
+  duet_send_m98("pulsar_start.g", " F" + to_str(feed) + " R" + to_str(flow))
+end
+
+def pulsar_flow_on(flow):
+  duet_send_m98("pulsar_flow.g", " S" + to_str(flow))
+end
+
+def pulsar_flow_off():
+  duet_send_m98("pulsar_flow.g", " S0")
+end
+
+# Retract / unretract. Use after pulsar_flow_off() and before a UR travel
+# move. The daemon keeps queueing extrusion chunks behind your retract, so
+# don't sit retracted for more than the chunk duration or the screw will
+# resume pushing material before you've unretracted.
+def pulsar_retract(mm, feed):
+  duet_send_m98("pulsar_retract.g", " S" + to_str(mm) + " F" + to_str(feed))
+end
+
+def pulsar_unretract(mm, feed):
+  duet_send_m98("pulsar_unretract.g", " S" + to_str(mm) + " F" + to_str(feed))
+end
+
+# Stop the screw cleanly. Heaters stay on.
+def pulsar_stop_extrusion():
+  duet_send_m98("pulsar_stop.g", "")
+end
+
+def pulsar_cooldown():
+  duet_send_m98("pulsar_cooldown.g", "")
+end
+
+# Pop up the current M105 reading. Diagnostic helper. Explicit
+# blocking=True — Polyscope 5's default is non-blocking.
+def pulsar_show_temp():
+  resp = duet_send_line_and_read("M105", 2.0)
+  popup("Temp:" + resp, title="Debug", warning=False, error=False, blocking=True)
+end

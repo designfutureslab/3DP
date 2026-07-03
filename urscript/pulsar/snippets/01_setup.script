@@ -1,0 +1,24 @@
+# Pulsar Setup — connect + preheat
+#
+# This is the "Pulsar Setup" command code (without the Declaration
+# block — that's a separate file you'd inline at the top of Program()
+# alongside pulsarTcp, etc.). Paste right after set_tcp / set_payload.
+#
+# pulsar_preheat() BLOCKS until the Duet confirms both zones are at
+# temp (Duet-side M116, no polling from the UR). This can take several
+# minutes from cold — the rest of the program only runs once it
+# genuinely finishes. pulsar_show_temp() reports the actual reading
+# once it does.
+#
+# Temps below are PLA. For PETG try barrel=220, nozzle=245.
+
+duet_open("172.22.22.100", 23)
+
+if (duet_handshake(2.0) == False):
+  popup("ERROR: Duet did not respond to M115. Aborting.", title="Fatal", warning=False, error=True, blocking=True)
+  halt
+end
+
+pulsar_clear_heater_faults()
+pulsar_preheat(190, 215)
+pulsar_show_temp()

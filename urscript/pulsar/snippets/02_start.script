@@ -1,0 +1,10 @@
+# Pulsar Start — operator gate, begin extrusion.
+#
+# Paste after the initial home movej, BEFORE the first print move.
+# The temperature wait already happened in Pulsar Setup (pulsar_preheat
+# blocks). The popup here is the final "I've checked the machine"
+# operator gate before the screw starts turning.
+
+popup("Press Ready to start your print", title="Operator_Safety", warning=False, error=False, blocking=True)
+
+pulsar_start_extrusion(900, 100)
