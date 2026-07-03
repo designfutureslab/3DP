@@ -1,0 +1,17 @@
+# Pulsar Setup — connect only. NON-BLOCKING.
+#
+# Preheat + purge have moved OUT of the print program into the separate
+# preheat_purge.script routine, which the operator runs once beforehand.
+# By the time this program runs, both zones are already at temp and the
+# screw is primed — so Setup just opens the socket and does a quick,
+# bounded handshake to fail loud if the Duet is unreachable. No multi-
+# minute waits anywhere in the live program.
+#
+# Paste right after set_tcp / set_payload.
+
+duet_open("172.22.22.100", 23)
+
+if (duet_handshake(2.0) == False):
+  popup("ERROR: Duet did not respond to M115. Run preheat_purge first and check the connection. Aborting.", title="Fatal", warning=False, error=True, blocking=True)
+  halt
+end
