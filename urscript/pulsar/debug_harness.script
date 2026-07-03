@@ -22,9 +22,14 @@
 #
 # DUET-SIDE SETUP REQUIRED (see /duet/ in this repo):
 #   - Upload `0:/sys/daemon.g` and `0:/sys/pulsar_init.g` from the repo.
-#   - Upload every `0:/macros/pulsar_*.g` file. Verify via DWC → Macros
-#     tab that all nine appear before running this harness.
+#   - Upload every `0:/macros/pulsar_*.g` file (ten total). Verify via
+#     DWC → Macros tab that all ten appear before running this harness.
+#   - Upload `0:/sys/config.g` too — it defines tool 1 (barrel/H0) and
+#     tool 2 (nozzle/H1), which pulsar_preheat.g and pulsar_cooldown.g
+#     now target directly. Without it, step 5 will error immediately.
 #   - Add `M98 P"pulsar_init.g"` to config.g and reboot the Duet.
+#     config.g only re-reads at boot, so this step is required even if
+#     you've already uploaded it before — reboot after every change.
 #   - Block terminators in the Duet macros are dedent-based — RRF 3.6
 #     rejects both bare `end` and `endif` with "Bad command: X".
 
