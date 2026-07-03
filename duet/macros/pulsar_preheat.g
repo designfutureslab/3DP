@@ -14,13 +14,23 @@
 ;   position 1 = H0 (barrel)
 ; So the colon-list order for S/R is  <nozzle>:<barrel>.
 ;
-; Object-model writes (set tools[0].active[i] = ...) do NOT work — the
-; RRF object model is read-only from meta-commands, so those lines threw
-; and the macro aborted before heating anything. Back to G10, which is
-; RRF's canonical "set this tool's heater temps" command.
+; SETPOINT DELIVERY — the colon-list must be built as ONE string
+; expression, not two adjacent substitutions:
 ;
-; The echo line reports what we actually parsed so the DWC console shows
-; the two values — a quick check that B and N came through distinct.
+;   BROKEN: G10 P0 S{var.nozzle}:{var.barrel}
+;     RRF parses S{var.nozzle} as complete (215), then drops the
+;     orphaned :{var.barrel}. A single S value gets broadcast to every
+;     heater on the tool → both zones end up at the nozzle temp.
+;     (Confirmed on Ric's Duet: echo showed 215/190 correct, but both
+;     heaters heated to 215. The literal `G10 P0 S215:190` worked.)
+;
+;   WORKS: build "215:190" as one string, substitute once.
+;     var.setlist = "" ^ nozzle ^ ":" ^ barrel  -> "215:190"
+;     G10 P0 S{var.setlist} ...  expands to  G10 P0 S215:190 ...
+;     which is byte-identical to the literal that worked.
+;
+; (Object-model writes — set tools[0].active[i] = ... — do NOT work
+; either; the RRF object model is read-only from meta-commands.)
 ;
 ; Blocks via M116 until every heater on tool 0 is within tolerance.
 ;
@@ -33,10 +43,13 @@ if exists(param.B)
 if exists(param.N)
   set var.nozzle = param.N
 
-echo "pulsar_preheat: nozzle(H1)=" ^ var.nozzle ^ " barrel(H0)=" ^ var.barrel
+; Colon-list in tool-heater order (H1:0) = nozzle:barrel.
+var setlist = "" ^ var.nozzle ^ ":" ^ var.barrel
+
+echo "pulsar_preheat: setlist=" ^ var.setlist ^ " (nozzle:barrel)"
 
 T0
-G10 P0 S{var.nozzle}:{var.barrel} R{var.nozzle}:{var.barrel}
+G10 P0 S{var.setlist} R{var.setlist}
 M116 P0
 
 ; Signal the UR that we're at temp. Will no-op until the DIO line is
