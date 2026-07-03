@@ -25,9 +25,10 @@ periodically. Moving the keep-it-spinning logic onto the Duet:
 | `sys/daemon.g` | `0:/sys/daemon.g` | Background loop. RRF auto-runs while booted. Feeds the screw short `G1 E` chunks while `pulsar_running`; computes its own inter-chunk dwell from chunk/feed. |
 | `sys/pulsar_init.g` | `0:/sys/pulsar_init.g` | Declares the globals the daemon reads (`pulsar_running`, `pulsar_feed`, `pulsar_chunk`). Called once from `config.g`. |
 | `macros/pulsar_preheat.g` | `0:/macros/pulsar_preheat.g` | Set + activate both zones via `M568 P1 S<barrel> R<barrel> A2` / `M568 P2 S<nozzle> R<nozzle> A2` (each zone's own single-heater tool), block until reached with `M116 P1` / `M116 P2`. Echoes the parsed temps to the console. See "Why each heater has its own tool" below for why. |
-| `macros/pulsar_start.g` | `0:/macros/pulsar_start.g` | Begin continuous extrusion: set `pulsar_feed`, `pulsar_running = true`. Rate is screw speed (`pulsar_feed`), not `M221`. |
+| `macros/pulsar_start.g` | `0:/macros/pulsar_start.g` | Begin continuous extrusion. **Clean-slate:** stops + drains (`M400`) first, resets E origin + `M221 100`, then sets `pulsar_feed` and `pulsar_running = true`. Starting IS the reset — a print can't inherit stale state from a previous run. |
 | `macros/pulsar_purge.g` | `0:/macros/pulsar_purge.g` | **Blocking** prime — `G1 E<mm> F<feed>` + `M400`. Run before a job (from `preheat_purge.script` or a DWC button), not on the live path. |
-| `macros/pulsar_stop.g` | `0:/macros/pulsar_stop.g` | Clear `pulsar_running`, release motor. |
+| `macros/pulsar_stop.g` | `0:/macros/pulsar_stop.g` | Canonical safe-idle: `pulsar_running = false`, **`M400` to drain the queue** (so "stopped" means stopped, not a few cm of buffered ooze), `M221 S0`, release motor. Heaters left on. |
+| `macros/debug/*.g` | `0:/macros/debug/` | DWC button macros for bench debugging — Status, Resume, Pause, Stop & Clear, Prime 10 mm, Cooldown. See "Debug buttons" below. |
 | `macros/pulsar_flow.g` | `0:/macros/pulsar_flow.g` | `M221 S<percent>`. **Legacy** — rate is now screw speed via `pulsar_feed`; kept only as an optional extrusion-factor trim for DWC. |
 | `macros/pulsar_retract.g` | `0:/macros/pulsar_retract.g` | Relative-E retract. Largely a no-op on a screw; not used by the live flow. |
 | `macros/pulsar_unretract.g` | `0:/macros/pulsar_unretract.g` | Relative-E unretract. Not used by the live flow. |
@@ -149,6 +150,35 @@ There is no `pulsar_dwell` global any more — `daemon.g` computes the
 inter-chunk dwell inline as `chunk / feed × 60 × 0.9` every iteration, so
 a live feed change re-paces itself (the `×0.9` issues the next chunk just
 before the current finishes → queue depth ~1, continuous motion).
+
+## Debug buttons (DWC Macros tab)
+
+Files in `0:/macros/debug/` show up as a **debug** folder in the DWC
+Macros tab, each a clickable button — handy at the bench without typing
+console commands. Upload the whole `duet/macros/debug/` folder.
+
+| Button | Does |
+|---|---|
+| `1_Status` | Echoes `pulsar_running` / `pulsar_feed` / `pulsar_chunk` to the console (temps are already live on the dashboard). |
+| `2_Resume` | Starts the screw at the current `pulsar_feed` (bumps it to 600 if it's 0). |
+| `3_Pause` | Stops the screw, leaves everything else as-is. |
+| `4_Stop_and_Clear` | **Panic button.** Full `pulsar_stop.g` — daemon off, queue drained, flow 0, motor released. Heaters stay on. |
+| `5_Prime_10mm` | Manually extrudes 10 mm to prime/clear the nozzle (stops the daemon first so it doesn't fight the move). Zones should be at temp. |
+| `6_Cooldown` | Both heater zones off. |
+
+These call the same macros / set the same globals the robot does, so
+nothing here is a special code path — it's the production plumbing with
+a button on it.
+
+## Resetting state between prints
+
+You don't need to manually reset anything between prints. `pulsar_start.g`
+does a clean-slate start every time: it clears `pulsar_running`, drains
+the queue with `M400`, re-zeroes the E origin and `M221`, and only then
+sets the feed and starts. So a stale `pulsar_running = true` or a
+half-drained queue from a previous run (or from bench testing) can't leak
+into the next print. If a student aborts a print mid-run, hit
+**Stop & Clear** (or just start the next print — it resets itself).
 
 ## Public API (called from URScript over telnet)
 
