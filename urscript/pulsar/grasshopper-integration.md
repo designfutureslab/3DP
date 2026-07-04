@@ -3,22 +3,25 @@
 How to weave Pulsar extrusion control into a Grasshopper-generated UR
 program using **Custom Command** components.
 
-> **⚠️ Updated for the responsiveness redesign — re-read before pasting.**
-> The model changed materially. The code blocks below have been updated
-> to match, but the canonical source of truth is
-> `urscript/pulsar/lib_pulsar.script` (functions) and the two READMEs.
-> What changed:
-> - **Preheat + purge moved out of the live program** into a separate,
->   blocking `preheat_purge.script` the operator runs once beforehand.
->   **Pulsar Setup no longer preheats** — it just connects. The live
->   program never blocks.
-> - **Live control is via Duet globals**, not `M221`:
->   `pulsar_set_rate(feed)` (rate), `pulsar_pause()` / `pulsar_resume()`.
->   Screw speed *is* the flow — there's no flow-% multiplier any more.
->   `pulsar_flow_off()` / `pulsar_flow_on()` remain as aliases → pause /
->   resume.
-> - **No retract** in the pause / layer-change / travel flows (inert on a
->   screw). `pulsar_start_extrusion(feed)` dropped its flow argument.
+> **⚠️ v3 (low-latency branch) — re-read before pasting.**
+> Canonical source of truth: `urscript/pulsar/lib_pulsar.script` and the
+> two READMEs. The v3 model:
+> - **One live knob:** `pulsar_set_rate(feed)` — mm/min screw speed =
+>   deposition rate. No flow-%, no `M221`, no retract, and the old
+>   `pulsar_flow_on/off` aliases are **gone** (use `pulsar_resume` /
+>   `pulsar_pause`).
+> - **Time-based daemon chunks** (`pulsar_latency`, default 0.25 s) —
+>   rate changes and pauses bite in ~constant time at any rate.
+> - **UR pause / e-stop stop the extruder in hardware**: a UR DO
+>   ("high while program running") wired to Duet `io1.in` gates the
+>   daemon directly. Nothing in the GH program handles pause — pausing
+>   the robot stops the screw within ~1 chunk, resuming resumes it.
+>   (`wait_for_pulsar_enabled` is gone from the library.)
+> - **Preheat + purge stay out of the live program** (separate blocking
+>   `preheat_purge.script` run beforehand). Setup just connects.
+> - **`[F]` values come from calibration**: the DWC calibration macros
+>   write `pulsar-flowcal.csv` (grams-per-time at 10 rates) that GH can
+>   fetch straight off the Duet — see "Calibration → Grasshopper" below.
 > - **PETG defaults:** barrel 215 °C, nozzle 245 °C, feed 600 mm/min.
 
 The GH component has four inputs we care about:
@@ -113,24 +116,21 @@ Polyscope 5.11 does NOT honour `\"` as an escape inside URScript string
 literals (parser closes the string early at the first `\"`), so we
 can't embed the quotes with a straight escape sequence.
 
-This block is a **complete, self-contained copy** of the helper library
-(`lib_pulsar.script`). The live print program only calls the
+This block is a **complete, self-contained copy** of the v3 helper
+library (`lib_pulsar.script`). The live print program only calls the
 non-blocking ones — `pulsar_start_extrusion`, `pulsar_set_rate`,
 `pulsar_pause`, `pulsar_resume`, `pulsar_stop_extrusion`,
 `pulsar_cooldown`, plus `duet_handshake` / `pulsar_show_temp` /
 `pulsar_clear_heater_faults` in Setup. The blocking ones
-(`duet_send_m98_and_read`, `pulsar_preheat`) and the
-`wait_for_pulsar_enabled` stub are included for parity but are **not
-used here** — preheat + purge run once beforehand in the separate
-`preheat_purge.script`. Leaving them defined is harmless (URScript
-just registers the functions) and means you can wire an optional
-component later without editing the Declaration. Paste the whole block.
+(`duet_send_m98_and_read`, `pulsar_preheat`, `pulsar_purge`) are
+included for parity but are **not used here** — preheat + purge run
+once beforehand in the separate `preheat_purge.script`. UR pause /
+e-stop needs nothing in this program at all: the hardware gate (UR
+"program running" DO → Duet `io1.in`) stops the screw directly.
+Paste the whole block.
 
 ```
-debug_pulsar_ready = True
-  pulsar_ready_pin   = 0
-
-  def duet_open(ip, port):
+def duet_open(ip, port):
     socket_open(ip, port, "duet")
     sleep(0.2)
   end
@@ -196,18 +196,11 @@ debug_pulsar_ready = True
 
   def pulsar_show_temp():
     resp = duet_send_line_and_read("M105", 2.0)
-    popup("Temp:" + resp, title="Debug", warning=False, error=False, blocking=True)
+    popup("Temp:" + resp, title="Pulsar", warning=False, error=False, blocking=True)
   end
 
-  # Reserved for future Duet->UR safety signalling (e-stop / pause)
-  # once a DIO line is wired between the two boards. Not used for
-  # temperature gating any more — pulsar_preheat() blocks on its own.
-  def wait_for_pulsar_enabled(debug, pin):
-    if (debug == False):
-      while (get_standard_digital_in(pin) == False):
-        sleep(0.5)
-      end
-    end
+  def pulsar_purge(mm, feed):
+    duet_send_m98_and_read("pulsar_purge.g", " E" + to_str(mm) + " F" + to_str(feed), 300.0)
   end
 
   def pulsar_start_extrusion(feed):
@@ -215,7 +208,7 @@ debug_pulsar_ready = True
   end
 
   # Live control — set Duet globals directly, fire-and-forget. Immediate
-  # (meta-command, not queued motion), picked up within ~1 chunk.
+  # (meta-command, not queued motion), picked up within ~pulsar_latency s.
   def pulsar_set_rate(feed):
     duet_send_line("set global.pulsar_feed = " + to_str(feed))
   end
@@ -226,16 +219,6 @@ debug_pulsar_ready = True
 
   def pulsar_resume():
     duet_send_line("set global.pulsar_running = true")
-  end
-
-  # Legacy aliases — flow % is no longer meaningful (rate = screw speed);
-  # these now just pause / resume. Prefer pulsar_pause/resume/set_rate.
-  def pulsar_flow_off():
-    pulsar_pause()
-  end
-
-  def pulsar_flow_on(flow):
-    pulsar_resume()
   end
 
   def pulsar_stop_extrusion():
@@ -289,9 +272,8 @@ popup("Press Ready to start your print", title="Operator_Safety", warning=False,
 ```
 
 To change the rate live during the print, call `pulsar_set_rate(<feed>)`
-from a Flow component (below). `wait_for_pulsar_enabled(...)` is still
-defined in Setup's Declaration but not called — add it back if/when a
-future Duet→UR safety signal is wired up.
+from a Rate component (below). UR pause / e-stop needs nothing here —
+the hardware gate stops the screw directly.
 
 | Substitute in | Default | Purpose |
 |---|---|---|
@@ -513,19 +495,51 @@ pulsar_set_rate([F])
 The `"172.22.22.100"` (Duet IP) isn't templated — add an `[IP]`
 placeholder to taste if you want to parameterise it too.
 
-## Note on the Duet→UR ready DIO
+## UR pause / e-stop → extruder stop (hardware gate)
 
-Earlier revisions of this doc used a `debug_pulsar_ready` /
-`pulsar_ready_pin` pair to gate on a Duet→UR hardware signal for
-"heaters at temp". That's no longer needed for temperature — the
-operator runs `preheat_purge.script` first, and `pulsar_preheat()`
-there blocks on the socket reply itself until both zones are at temp,
-so the heaters are already ready before the live program ever runs.
+Nothing in the GH program handles robot pause. A UR digital output,
+configured in **Installation → I/O Setup** with the action **"High when
+program is running"**, is wired to the Duet's `io1.in` (+ common 0V).
+`daemon.g` requires that pin to read 1 (when `global.pulsar_hw_gate` is
+true), so:
 
-The `wait_for_pulsar_enabled(debug, pin)` function is kept in the
-Declaration purely as a placeholder for a *different* future use: a
-Duet→UR safety signal (e-stop / pause) that would need its own wiring
-and its own Duet-side macro logic, separate from
-`pulsar_signal_ready.g` / `pulsar_signal_clear.g`. Don't wire those
-existing signal macros up expecting them to gate temperature — that
-job is already done.
+- **Pause** the UR → DO drops → screw stops within ~1 chunk (~0.25 s).
+- **E-stop** the UR → all UR outputs drop → same stop, no software
+  involved at all.
+- **Resume** → DO high → screw resumes at the current rate
+  automatically.
+- Broken/unplugged wire reads low → extruder stops → fail-safe.
+
+Until the wire is in, leave `pulsar_hw_gate = false` (the default) in
+`pulsar_init.g` and everything works as before. Full wiring detail in
+`/duet/README.md`.
+
+## Calibration → Grasshopper ([F] values from real data)
+
+The DWC calibration macros (`macros/calibration/` on the Duet) produce
+CSVs on the SD card that GH can fetch straight off the printer:
+
+| File | Content | URL |
+|---|---|---|
+| `pulsar-temps.csv` | material, barrel, nozzle | `http://<ip>/rr_download?name=/sys/pulsar-temps.csv` |
+| `pulsar-limits.csv` | material, min feed, max feed, temps | `http://<ip>/rr_download?name=/sys/pulsar-limits.csv` |
+| `pulsar-flowcal.csv` | material, feed, seconds, grams, g/min, mm³/s | `http://<ip>/rr_download?name=/sys/pulsar-flowcal.csv` |
+
+In GH, fetch the flow-cal CSV (Swiftlet's HTTP GET, a one-line C#
+`WebClient.DownloadString`, or manually download via DWC → System and
+read the file). Interpolate the feed→mm³/s curve to pick the `[F]` that
+delivers your target volumetric flow (layer height × bead width × robot
+speed), instead of guessing from steps/mm.
+
+## EXPERIMENTAL — pendant speed slider drives extrusion (autorate)
+
+`urscript/pulsar/autorate_thread.script` is an optional URScript thread
+that polls the robot's *actual* TCP speed ~7×/s and pushes a matching
+feed to the Duet (`feed = k × speed`). With it running, dragging the
+pendant speed slider — or the robot's own accel/decel — automatically
+modulates deposition. Paste its defs into the Setup Declaration, start
+it right after `pulsar_start_extrusion(...)` with `thrd = run
+pulsar_autorate()`, and `kill thrd` before Pulsar Stop. Follow lag is
+~0.3–0.5 s, so it's for slider moves and gentle ramps — not sharp
+corners (keep blend radii doing that). Calibrate `pulsar_k` as
+`F_nominal / v_nominal` (e.g. 600 / 0.035 ≈ 17143).

@@ -1,0 +1,53 @@
+# EXPERIMENTAL — autorate: slave extrusion rate to actual robot TCP speed.
+#
+# WHY: the pendant speed slider scales the robot's real speed, but the
+# extruder normally keeps pumping at the programmed rate — turn the
+# slider to 50% and you over-extrude 2x. This thread closes that loop:
+# it polls the robot's ACTUAL tool speed a few times a second and pushes
+# a matching feed to the Duet, so slider changes (and accel/decel into
+# corners) automatically modulate deposition.
+#
+#   feed(mm/min) = pulsar_k * tcp_speed(m/s)
+#
+# Calibrate pulsar_k from your nominal pairing: printing at 35 mm/s
+# (0.035 m/s) with F600 -> k = 600 / 0.035 = 17143.
+#
+# USAGE (paste the defs into the GH Setup Declaration; start the thread
+# right after pulsar_start_extrusion in the Start command code):
+#
+#   thrd = run pulsar_autorate()      # start following
+#   ...print...
+#   kill thrd                          # stop following before Pulsar Stop
+#
+# NOTES / LIMITS
+# - Updates every 0.15 s, and only when the change exceeds pulsar_deadband
+#   (avoids spamming Telnet with identical values). With the Duet daemon's
+#   ~0.25 s chunk latency, total follow lag is ~0.3-0.5 s — fine for
+#   slider moves and gentle speed ramps, too slow to compensate sharp
+#   per-corner decel spikes (keep blend radii doing that job).
+# - When the robot pauses, this thread pauses with it (UR threads freeze
+#   on pause) — the HARDWARE gate is what stops the screw, not this.
+# - Floors the rate at pulsar_min_feed so slow approach moves don't stall
+#   the melt entirely; set it to your measured min rate.
+# - get_actual_tcp_speed() returns a 6-vector; we use the linear part.
+
+pulsar_k        = 17143.0
+pulsar_min_feed = 150.0
+pulsar_deadband = 15.0
+
+thread pulsar_autorate():
+  last_f = -100.0
+  while (True):
+    v = get_actual_tcp_speed()
+    spd = sqrt(v[0]*v[0] + v[1]*v[1] + v[2]*v[2])
+    f = pulsar_k * spd
+    if (f < pulsar_min_feed):
+      f = pulsar_min_feed
+    end
+    if (fabs(f - last_f) > pulsar_deadband):
+      duet_send_line("set global.pulsar_feed = " + to_str(f))
+      last_f = f
+    end
+    sleep(0.15)
+  end
+end
