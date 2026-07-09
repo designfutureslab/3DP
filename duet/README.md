@@ -109,7 +109,7 @@ time. Because `M221`/pause only affect moves planned *after* them, any
 control change waited out that whole in-flight move — up to ~67 s of lag.
 That was the unresponsiveness, not a bug.
 
-Fix: keep the screw fed with **short** chunks (default 5 mm) and control
+Fix: keep the screw fed with **short, time-sized** chunks and control
 everything by setting Duet globals directly over Telnet:
 
 - **Rate** — `set global.pulsar_feed = <mm/min>`. Screw speed *is* the
@@ -119,9 +119,14 @@ everything by setting Duet globals directly over Telnet:
 
 `set global.…` is an immediate meta-command (not queued motion), so RRF
 applies it at once; the daemon picks it up on its next loop iteration.
-With a 5 mm chunk that's ~0.3–0.8 s end to end — the stepper ceiling.
-Drop `pulsar_chunk` toward 3 for snappier, raise it if the screw
-stutters.
+
+**v3: chunks are sized in TIME, not mm.** Each chunk is
+`feed/60 × pulsar_latency` mm, so one chunk always takes
+~`pulsar_latency` seconds (default 0.25 s) at any rate. With the old
+fixed-mm chunk, response time ballooned at low rates (2 mm @ F100 =
+1.2 s) — now a rate change or pause bites in roughly constant time
+across the whole F150–F1200+ range. Lower `pulsar_latency` for snappier
+control (meta-command overhead starts to dominate below ~0.1 s).
 
 ### The daemon loops internally — don't rely on RRF re-invocation
 
@@ -138,18 +143,38 @@ the loop exits, the file returns, and RRF re-invokes it a few seconds
 later to idle until the next run. If you ever refactor `daemon.g` back
 to "one chunk per invocation," the 5–6 s stutter returns.
 
-### Daemon globals
+### Daemon globals (v3)
 
 | Global | Default | Meaning |
 |---|---|---|
-| `pulsar_running` | `false` | While true, the daemon's internal `while` loop feeds one chunk per iteration. Clear it to pause (loop exits within ~1 chunk). |
-| `pulsar_feed` | `600` | F-value (mm/min) — the live rate knob. **Must stay > 0 while running** (the daemon divides the dwell by it; pause via the flag, never via feed 0). |
-| `pulsar_chunk` | `5` | mm of E per chunk. Short = responsive. |
+| `pulsar_running` | `false` | While true (and gates pass), the daemon's internal `while` loop feeds chunks. Clear it to pause (bites within ~1 chunk). |
+| `pulsar_feed` | `600` | mm/min — the ONE live rate knob. **Must stay > 0 while running** (pause via the flag, never via feed 0). |
+| `pulsar_latency` | `0.25` | Seconds per chunk. Chunk mm is derived (`feed/60 × latency`), so control response is ~constant in time at any rate. |
+| `pulsar_hw_gate` | `false` | When true, the daemon also requires `gpIn[0]` (UR "program running" DO on `io1.in`) to read 1. Enable only after the wire is in. |
 
-There is no `pulsar_dwell` global any more — `daemon.g` computes the
-inter-chunk dwell inline as `chunk / feed × 60 × 0.9` every iteration, so
-a live feed change re-paces itself (the `×0.9` issues the next chunk just
-before the current finishes → queue depth ~1, continuous motion).
+`pulsar_chunk` and `pulsar_dwell` are gone (v3) — chunk length is
+derived from feed × latency, and there is no dwell at all (a `G4`
+between chunks executes as a queued stop and pulses the bead; see git
+history). Consecutive `G1 E` moves blend in the planner into continuous
+rotation, and the loop self-paces by blocking on `G1` when the
+look-ahead queue fills.
+
+### UR pause / e-stop hardware gate
+
+Wire a UR digital output to `io1.in` + common 0V (Duet 3 io inputs are
+30V-tolerant, so the UR's 24V drives them directly). On the pendant, in
+**Installation → I/O Setup**, set that output's action to **"High when
+program is running"**. Then set `pulsar_hw_gate = true` in
+`pulsar_init.g` and reboot.
+
+Result: pausing the UR program — or e-stopping, which drops every UR
+output — pulls the pin low and the daemon stops feeding within ~1 chunk
+(~0.25 s), with no Telnet round-trip and even if URScript is frozen.
+Resuming the program raises the pin and the screw resumes at the
+current rate automatically. A broken wire reads low → extruder stops →
+fail-safe (which is also why the input has no pullup in `M950 J0`).
+Verify the pin with the `1_Status` debug button or
+`M409 K"sensors.gpIn"`.
 
 ## Debug buttons (DWC Macros tab)
 
@@ -169,6 +194,22 @@ console commands. Upload the whole `duet/macros/debug/` folder.
 These call the same macros / set the same globals the robot does, so
 nothing here is a special code path — it's the production plumbing with
 a button on it.
+
+## Calibration macros (DWC Macros tab → calibration/)
+
+Interactive walkthroughs (M291 dialogs, RRF 3.5+; operator answers on
+DWC). Run them in order for each new material, with pellets loaded:
+
+| Macro | Does | Output (SD) |
+|---|---|---|
+| `1_Temp_Walkthrough` | Enter start temps → preheat + soak → repeated 30 mm test extrusions, nudging ±10 °C until you accept. | appends `material,barrel,nozzle` → `/sys/pulsar-temps.csv` |
+| `2_Rate_Limits` | Step the feed up until skipping/stall (max), then down until the bead is unusable (min). | appends `material,min,max,barrel,nozzle` → `/sys/pulsar-limits.csv` |
+| `3_Flow_Cal_10_Steps` | **Gravimetric flow calibration** — 10 rates from Fmin→Fmax, extrude a fixed time at each, weigh, type grams in. Writes the row immediately (abort-safe). | overwrites `/sys/pulsar-flowcal.csv` with `material,feed,seconds,grams,g_per_min,mm3_per_s` |
+
+Grasshopper fetches any of these straight off the printer:
+`http://<duet-ip>/rr_download?name=/sys/pulsar-flowcal.csv` — interpolate
+the feed→mm³/s curve to pick `[F]` for a target layer height × bead
+width × robot speed.
 
 ## Resetting state between prints
 

@@ -1,24 +1,27 @@
 
-# Pulsar Atom + Duet 3 helper library for UR (CB3 & e-Series URScript)
+# Pulsar Atom + Duet 3 helper library (v3 low-latency, rate-only)
 #
-# DAEMON ARCHITECTURE — all extrusion state lives on the Duet. This library
-# is now a thin wrapper that fires Duet-side macros via M98. The Duet's
-# `0:/sys/daemon.g` keeps the screw turning while `global.pulsar_running`
-# is true, so the UR no longer has to think about move-duration limits or
-# top-up timing.
+# ONE live knob: pulsar_set_rate(feed). Screw speed IS deposition rate on
+# a single-screw pellet extruder — there is no flow-%, no retract (inert
+# on a screw; stopping the screw is what breaks the bead), no M221.
 #
-# NOTE ON QUOTES — Polyscope's URScript does NOT reliably honour `\"` as
-# an escape for an embedded double-quote inside a string literal
-# (confirmed broken on 5.11.11 — parser fails at the first `\"`). RRF's
-# M98 requires quoted filenames, so we can't just drop the quotes.
-# Workaround: build every "M98 P\"filename\" ..." line byte-by-byte
-# using socket_send_byte(34, ...) for each `"` character. See
-# duet_send_m98() below.
+# LATENCY MODEL
+#   - Duet daemon feeds time-sized chunks (~pulsar_latency s each,
+#     default 0.25 s) with no dwell → continuous rotation.
+#   - pulsar_set_rate / pulsar_pause / pulsar_resume are fire-and-forget
+#     `set global...` Telnet lines — RRF applies them immediately (meta-
+#     commands), daemon re-reads within ~1 chunk. End-to-end ≈ 0.3-1 s.
+#   - UR PAUSE and E-STOP are handled in HARDWARE, not here: a UR digital
+#     output configured "high while program running" wires to Duet io1.in
+#     and gates the daemon directly. Nothing to call — pausing the robot
+#     stops the screw within ~1 chunk even if URScript is frozen.
 #
-# Required Duet-side setup (see /duet/ in this repo):
-#   - `0:/sys/daemon.g` and `0:/sys/pulsar_init.g` uploaded
-#   - `M98 P"pulsar_init.g"` added to `config.g`
-#   - All `0:/macros/pulsar_*.g` macros uploaded
+# QUOTES: Polyscope 5.11 doesn't honour \" inside string literals, so
+# every M98 line is built byte-wise via socket_send_byte(34) for the
+# quote characters (duet_send_m98 / duet_send_m98_and_read).
+#
+# Duet-side setup: see /duet/README.md (daemon.g v3 + pulsar_init.g v3 +
+# macros; M950 J0 input; pulsar_hw_gate flag once the UR wire is in).
 
 # ---------- low-level Duet I/O ----------
 
@@ -35,14 +38,6 @@ def duet_send_line(line):
   socket_send_line(line, "duet")
 end
 
-# Build and send an M98 macro call:  M98 P"0:/macros/<filename>"<params>\n
-#
-# Uses an absolute path because Ric's RRF 3.6 doesn't auto-search
-# 0:/macros/ from the console — only 0:/sys/ is on the default path.
-# Absolute paths sidestep the ambiguity everywhere.
-#
-# Quote characters go through socket_send_byte(34) because URScript's
-# \" escape isn't honoured on Polyscope 5.11.
 def duet_send_m98(filename, params):
   socket_send_string("M98 P", "duet")
   socket_send_byte(34, "duet")
@@ -60,11 +55,8 @@ def duet_send_line_and_read(line, timeout):
   return resp
 end
 
-# Same byte-built M98 call as duet_send_m98(), but blocks for a reply.
-# RRF doesn't send "ok" back over Telnet until the whole macro file —
-# including any blocking command inside it, e.g. pulsar_preheat.g's
-# M116 — has finished executing. So this is how we get a genuinely
-# blocking preheat without any polling from the UR side.
+# Blocking M98 — RRF sends "ok" only after the whole macro (incl. M116 /
+# M400 inside it) finishes. How preheat/purge block without polling.
 def duet_send_m98_and_read(filename, params, timeout):
   socket_send_string("M98 P", "duet")
   socket_send_byte(34, "duet")
@@ -78,8 +70,6 @@ def duet_send_m98_and_read(filename, params, timeout):
   return resp
 end
 
-# socket_open's return value is unreliable — verify connectivity by
-# sending M115 and checking a response came back.
 def duet_handshake(timeout):
   resp = duet_send_line_and_read("M115", timeout)
   if (resp != ""):
@@ -88,117 +78,39 @@ def duet_handshake(timeout):
   return False
 end
 
-# ---------- Pulsar high-level functions ----------
+# ---------- Pulsar: setup / teardown (not latency-sensitive) ----------
 
 def pulsar_clear_heater_faults():
   duet_send_m98("pulsar_clear_faults.g", "")
   sleep(0.1)
 end
 
-# Set both zone targets and BLOCK until both heaters are at temp.
-# Blocking happens Duet-side via M116 inside pulsar_preheat.g — the UR
-# just waits on the socket reply, so there's no polling loop and no
-# operator judgement call about when it's "close enough". Timeout is
-# generous (15 min) because a cold barrel legitimately takes several
-# minutes; if it fires, something is actually wrong (heater fault,
-# thermistor fault, etc.) and we want to know.
-#
-# barrel = H0 ("Top"  label) — feed/compression zone
-# nozzle = H1 ("Bottom" label) — metering/exit zone
+# Blocking preheat (Duet-side M116). Run from preheat_purge.script, not
+# the live print program.
 def pulsar_preheat(barrel, nozzle):
   resp = duet_send_m98_and_read("pulsar_preheat.g", " B" + to_str(barrel) + " N" + to_str(nozzle), 900.0)
   if (resp == ""):
-    popup("WARNING: preheat timed out waiting for the Duet. Check heaters, thermistors and M570 config.", title="Debug", warning=True, error=False, blocking=True)
+    popup("WARNING: preheat timed out. Check heaters/thermistors.", title="Pulsar", warning=True, error=False, blocking=True)
   end
   return resp
 end
 
-# Reserved for future Duet→UR safety signalling (e-stop / pause) once
-# a DIO line is wired between the two — see /duet/README.md. Not used
-# for temperature gating any more; pulsar_preheat() blocks on its own.
-#
-#   debug=True:  no-op, returns immediately.
-#   debug=False: poll UR digital input `pin` until it goes high.
-def wait_for_pulsar_enabled(debug, pin):
-  if (debug == False):
-    while (get_standard_digital_in(pin) == False):
-      sleep(0.5)
-    end
-  end
-end
-
-# Prime the screw with a blocking purge extrude. Only used by the
-# separate preheat+purge routine (preheat_purge.script), before a job —
-# never on the live print path. Blocks on the socket reply because
-# pulsar_purge.g ends in M400 (wait-for-move-complete), so RRF holds the
-# "ok" until the purge physically finishes. Run only while the daemon is
-# idle (before pulsar_start_extrusion).
+# Blocking purge/prime (Duet-side M400).
 def pulsar_purge(mm, feed):
-  resp = duet_send_m98_and_read("pulsar_purge.g", " E" + to_str(mm) + " F" + to_str(feed), 300.0)
-  return resp
+  duet_send_m98_and_read("pulsar_purge.g", " E" + to_str(mm) + " F" + to_str(feed), 300.0)
 end
 
-# Begin continuous extrusion via the Duet daemon. After this returns, the
-# screw is turning; the daemon feeds short chunks at global.pulsar_feed.
-# No flow argument any more — rate is screw speed (pulsar_set_rate).
+def pulsar_show_temp():
+  resp = duet_send_line_and_read("M105", 2.0)
+  popup("Temp:" + resp, title="Pulsar", warning=False, error=False, blocking=True)
+end
+
+# Clean-slate start (Duet macro drains + resets before starting).
 def pulsar_start_extrusion(feed):
   duet_send_m98("pulsar_start.g", " F" + to_str(feed))
 end
 
-# ---- LIVE control (fire-and-forget, ~1 chunk latency) ----
-#
-# These set Duet globals directly over Telnet. RRF processes a `set
-# global.x = ...` immediately (it's a meta-command, not queued motion),
-# and the daemon picks the new value up on its next iteration — roughly
-# one chunk, ~0.3-0.8 s with the default 5 mm chunk. This is what
-# replaced the old M221-based flow control, which lagged by a whole
-# queued chunk. No socket read: we don't wait, so the UR never blocks.
-
-# Set the live deposition rate (screw speed, mm/min). This is the "flow"
-# knob — on a single screw, speed is the volumetric rate.
-def pulsar_set_rate(feed):
-  duet_send_line("set global.pulsar_feed = " + to_str(feed))
-end
-
-# Pause the bead: stop the daemon feeding chunks. The screw halts within
-# ~one chunk. Heaters and socket stay up; resume with pulsar_resume().
-# Do NOT pause by setting the rate to 0 — daemon.g divides the dwell by
-# feed, so rate must stay > 0. Pausing is always via the running flag.
-def pulsar_pause():
-  duet_send_line("set global.pulsar_running = false")
-end
-
-def pulsar_resume():
-  duet_send_line("set global.pulsar_running = true")
-end
-
-# ---- Legacy flow aliases ----
-# Kept so existing snippets / GH code that call pulsar_flow_off()/on()
-# still work. Flow % is no longer meaningful (rate = screw speed), so
-# these now just pause / resume the screw. Prefer pulsar_pause() /
-# pulsar_resume() / pulsar_set_rate() in new code.
-def pulsar_flow_off():
-  pulsar_pause()
-end
-
-def pulsar_flow_on(flow):
-  pulsar_resume()
-end
-
-# Retract / unretract. Largely a no-op on a screw extruder (the large
-# compressible melt volume swallows a few mm of E), so the pause and
-# layer-change flows no longer call these — pulsar_pause() alone breaks
-# the bead. Kept available if you want to experiment. Only meaningful
-# while the daemon is paused, else it fights the daemon's chunks.
-def pulsar_retract(mm, feed):
-  duet_send_m98("pulsar_retract.g", " S" + to_str(mm) + " F" + to_str(feed))
-end
-
-def pulsar_unretract(mm, feed):
-  duet_send_m98("pulsar_unretract.g", " S" + to_str(mm) + " F" + to_str(feed))
-end
-
-# Stop the screw cleanly. Heaters stay on.
+# Stop + drain + motor off (heaters stay on; add pulsar_cooldown after).
 def pulsar_stop_extrusion():
   duet_send_m98("pulsar_stop.g", "")
 end
@@ -207,9 +119,18 @@ def pulsar_cooldown():
   duet_send_m98("pulsar_cooldown.g", "")
 end
 
-# Pop up the current M105 reading. Diagnostic helper. Explicit
-# blocking=True — Polyscope 5's default is non-blocking.
-def pulsar_show_temp():
-  resp = duet_send_line_and_read("M105", 2.0)
-  popup("Temp:" + resp, title="Debug", warning=False, error=False, blocking=True)
+# ---------- Pulsar: LIVE control (the fast path) ----------
+# Fire-and-forget meta-commands. No socket read, no blocking, applied by
+# the daemon within ~pulsar_latency seconds.
+
+def pulsar_set_rate(feed):
+  duet_send_line("set global.pulsar_feed = " + to_str(feed))
+end
+
+def pulsar_pause():
+  duet_send_line("set global.pulsar_running = false")
+end
+
+def pulsar_resume():
+  duet_send_line("set global.pulsar_running = true")
 end

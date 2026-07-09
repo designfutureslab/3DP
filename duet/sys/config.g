@@ -85,6 +85,19 @@ M106 P0 S1 L0 X1 B0.1 ; configure fan #0
 M950 F1 C"out6" ; create fan #1
 M106 P1 S1 L0 X1 B0.1 ; configure fan #1
 
+; --- UR "program running" gate input (daemon hardware gate) ---
+; gpIn[0] reads a UR digital output configured (Installation → I/O Setup)
+; as "High when program is running". Pausing OR e-stopping the UR drops
+; the output, the pin reads 0, and daemon.g stops feeding the screw
+; within ~1 chunk — no Telnet involved. Wiring: UR DO signal → io1.in,
+; UR 0V → Duet GND. Duet 3 io inputs are 30V-tolerant, so the UR's 24V
+; drives it directly. No pullup (plain "io1.in", not "^io1.in") so a
+; broken wire reads LOW = extruder stops = fail-safe.
+; The gate is IGNORED until global.pulsar_hw_gate is set true in
+; pulsar_init.g — do that only after the wire is in and verified with
+; M409 K"sensors.gpIn".
+M950 J0 C"io1.in"
+
 ; Tools
 ;
 ; Two bugs, two fixes, in order:
