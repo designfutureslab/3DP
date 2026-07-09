@@ -529,3 +529,65 @@ and its own Duet-side macro logic, separate from
 `pulsar_signal_ready.g` / `pulsar_signal_clear.g`. Don't wire those
 existing signal macros up expecting them to gate temperature — that
 job is already done.
+
+## Standalone preheat `.urp`, auto-generated per print
+
+For student use: alongside the main print file, have GH also write a
+**second, self-contained `.urp`** that does nothing but connect, clear
+faults, and blocking-preheat to the material's temps — named
+`<printfilename>_preheat.urp` in the same folder as the print file.
+Students run that once, wait for "Ready", then run the print file
+(which no longer preheats itself). On back-to-back prints with the
+heaters already hot, they just skip it.
+
+Templates: `urscript/pulsar/templates/preheat_only.script` (the
+URScript body alone) and `preheat_only.urp` (the same body wrapped in
+the `.urp` XML container). Both use `[Barrell]` / `[Nozzle]` placeholders
+— same find/replace convention as the rest of this doc — plus
+`[PrintFileName]` for the `name=` attribute and the `<file>` reference.
+
+### Assembling it in Grasshopper
+
+1. Take the full text of `preheat_only.urp`.
+2. Find/replace `[PrintFileName]` → the print's filename (no
+   extension), `[Barrell]` → barrel temp, `[Nozzle]` → nozzle temp.
+3. Write the result to `<same folder as the print file>/<printfilename>_preheat.urp`.
+4. **Also** write the *inner script only* (`preheat_only.script`, same
+   find/replace) to `<same folder>/<printfilename>_preheat.script` —
+   same basename as the `<file>` tag inside the `.urp`, sitting next to
+   it. This mirrors how Polyscope itself persists a saved program
+   (`.urp` wrapper + `.script` body as siblings) and is the most likely
+   fix for the failure mode below. Cheap to do even if it turns out not
+   to be load-bearing.
+5. Gate steps 3–4 behind your export toggle so students doing
+   back-to-back prints can skip regenerating it.
+
+### Known risk — a hand-built `.urp` failed once before
+
+A `.urp` built with this exact XML skeleton was hand-authored earlier
+in this project (no accompanying `.script` sibling) and failed to load
+on the pendant — Polyscope reported only "could not be loaded," no
+further diagnostic. The skeleton itself is proven (it matches real
+`.urp` exports from this same GH pipeline that DO load and run), so the
+leading theory is the missing sibling file, which step 4 above adds.
+**Test this once on the pendant before rolling it out** — if it still
+won't load, tell me the exact symptom (loads-but-errors vs.
+won't-open-at-all) and we'll adjust from real data instead of guessing
+again.
+
+Also note: this is the first time `pulsar_preheat.g` will be triggered
+from a *loaded, saved* UR program rather than the DWC console or a
+pasted pendant script. The macro itself is proven (you've called it
+directly via `M98 P"..."` from DWC), but run this supervised the first
+time.
+
+### Formatting rule for future edits
+
+`<cachedContents>` is raw XML text, not CDATA. If the script body ever
+needs a literal `<`, `>`, or `&` (e.g. a numeric comparison like
+`f < pulsar_min_feed`), those characters **must** be XML-entity-escaped
+(`&lt;`, `&gt;`, `&amp;`) in both the `.urp` and anywhere else the text
+gets embedded — an unescaped one breaks the XML and likely produces the
+same silent "could not be loaded" failure. The current
+`preheat_only.script` contains none of these characters, so it's safe
+as-is; check again before adding any comparison operators.
