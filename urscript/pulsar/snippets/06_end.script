@@ -1,0 +1,9 @@
+# Pulsar End — operator popup + close socket.
+#
+# Paste at the very end of the program, AFTER the return-home movej.
+# Robot is parked, screw is already off (Pulsar Stop did that), heaters
+# are cooling. This is just the operator notification + socket cleanup.
+
+popup("Job Complete!", title="Job_Done", warning=False, error=False, blocking=True)
+
+duet_close()
