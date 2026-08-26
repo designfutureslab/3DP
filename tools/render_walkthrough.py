@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 render_walkthrough.py — auto-render GH definition walkthroughs
 
@@ -95,7 +96,7 @@ GROUP_PREFIX_RE = re.compile(r'^(\d+)')
 def sorted_groups(doc):
     """
     Return GH_Group objects whose names match 'NN — Title', excluding
-    any whose name starts with _.  Sorted by the leading NN number.
+    any whose name starts with //.  Sorted by the leading NN number.
     """
     from Grasshopper.Kernel.Special import GH_Group
 
