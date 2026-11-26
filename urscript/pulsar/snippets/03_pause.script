@@ -1,0 +1,14 @@
+# Pulsar Pause — scripted mid-print pause for inserts / inspection.
+#
+# pulsar_pause() clears global.pulsar_running, so the daemon stops
+# feeding chunks and the screw halts within ~one chunk (~0.3-0.8 s). No
+# retract — on a screw extruder a few mm of E-retract is swallowed by the
+# melt volume; stopping the screw is what breaks the bead. The popup
+# blocks (operator does the insert); pulsar_resume() restarts the screw
+# at the current rate when they click OK.
+
+pulsar_pause()
+
+popup("Insert hardware now. Click OK to resume.", title="Pause", warning=False, error=False, blocking=True)
+
+pulsar_resume()

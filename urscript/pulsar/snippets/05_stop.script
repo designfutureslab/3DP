@@ -1,0 +1,12 @@
+# Pulsar Stop — wind down the extruder, leave the robot to move home.
+#
+# Paste after the last bead movej, BEFORE any return-home travel.
+# pulsar_pause() halts the screw first (within ~one chunk) so nothing
+# extrudes during the home move, then pulsar_stop_extrusion() clears the
+# running flag and releases the motor, and pulsar_cooldown() turns the
+# heaters off. No popup here — the operator gate lives in the Pulsar End
+# block that fires after the robot has parked.
+
+pulsar_pause()
+pulsar_stop_extrusion()
+pulsar_cooldown()
