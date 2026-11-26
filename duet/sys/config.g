@@ -23,18 +23,25 @@ M586 P2 S1                   ; enable Telnet
 ; ---M906 I30 ; set motor current idle factor
 ; ---M84 S30 ; set motor current idle timeout
 
-; Driver & mapping — extruder is on onboard Drive 1 (driver 0.1) as of
-; the re-wire from an external driver that was on 0.4. Flip S if the
-; screw spins the wrong direction once you confirm motion.
-M569 P0.1 S1 D2                 ; driver 0.1 forward, spreadCycle
-M584 E0.1                       ; map extruder to driver 0.1
+; Driver & mapping — the Pulsar screw motor is on the DYZE external
+; stepper driver (48 V), fed step/dir/enable by a Duet 3 Expansion 1XD
+; over CAN at the 1XD's default address 122.
+;   S1 = forward   (flip to S0 if the screw turns the wrong way)
+;   R0 = enable active-low (flip to R1 if the motor is limp when it
+;        should be energised, or energised when it should be off)
+;   T  = step high : step low : dir setup : dir hold, in microseconds —
+;        safe values for opto-isolated external drivers
+G4 S2                           ; wait for CAN expansion boards to start
+M569 P122.0 S1 R0 T2.5:2.5:5:5  ; 1XD -> DYZE driver
+M584 E122.0                     ; map extruder to the 1XD
 
-; Microstepping + steps
-M350 E16 I1                     ; 16× + interpolation (Dyze baseline assumes 16×)
-M92  E1000                      ; Dyze baseline steps/mm (calibrate later)
+; Microstepping and motor current are set on the DYZE driver's DIP
+; switches, NOT here — M350 and M906 don't apply to external drivers.
+; Set the DIP to 16 microsteps (3200 pulses/rev on a 1.8° motor) so the
+; steps/mm below stays valid. Different microstep: M92 = 1000 x (ustep/16).
+M92  E1000                      ; Dyze baseline steps/mm at 16x (calibrate later)
 
-; Current & motion (start conservative)
-M906 E1200 I30                  ; ~1.2 A RMS, 30% idle (motor rated 1.68 A/phase)
+; Motion (start conservative)
 M203 E6000                      ; max feed 6000 mm/min (100 mm/s)
 M201 E500                       ; accel 500 mm/s²
 M566 E300                       ; jerk 300 mm/min (5 mm/s)
@@ -43,10 +50,8 @@ M566 E300                       ; jerk 300 mm/min (5 mm/s)
 M302 P1                         ; allow cold extrusion (remove in production)
 M83                             ; relative extrusion
 
-; Motor is now on the onboard driver at 0.1, so M906 E<current> above
-; DOES apply — start at 1200 mA (1.2 A RMS), the onboard driver caps
-; around 1.4 A RMS. If the screw stalls under load, push toward 1400.
-M906 I30
+; Idle timeout: after 30 s with no motion the 1XD drops the driver's
+; enable line. (Current is set on the DYZE driver, not with M906.)
 M84 S30
 ; ---; Extruders
 ; ---M584 E5 ; set extruder mapping
