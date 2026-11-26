@@ -35,10 +35,19 @@ G4 S2                           ; wait for CAN expansion boards to start
 M569 P122.0 S1 R0 T2.5:2.5:5:5  ; 1XD -> DYZE driver
 M584 E122.0                     ; map extruder to the 1XD
 
-; Microstepping and motor current are set on the DYZE driver's DIP
+; Microstepping and motor current are set on the DYZE driver's rotary
 ; switches, NOT here — M350 and M906 don't apply to external drivers.
-; Set the DIP to 16 microsteps (3200 pulses/rev on a 1.8° motor) so the
-; steps/mm below stays valid. Different microstep: M92 = 1000 x (ustep/16).
+; DYZE's recommended Pulsar Atom settings (Stepper Driver docs):
+;   AMPS  = 3  (1.6 A RMS — the Atom motor's rating)
+;   uSTEP = 2  (16 microsteps, interpolated, 3200 pulses/rev)
+;   STALL = 1  (keeps CoolStep on; 0 disables it — don't use 0)
+; uSTEP 2 keeps the steps/mm below valid. Other ustep: M92 = 1000 x (ustep/16).
+; Wiring (DYZE CONTROLLER terminal): STEP, DIR, ENA, GND from the 1XD;
+; P-UP and STALL only needed for stall detection. DYZE inputs take 3.3-5 V
+; directly — NO series resistors with the 1XD's 5 V outputs (resistors
+; are only for 12/24/48 V controllers). ENA is active-low and the driver
+; is enabled when ENA is unconnected (DYZE's own Duet example uses R1 —
+; if the motor won't energise with R0 above, try R1).
 M92  E1000                      ; Dyze baseline steps/mm at 16x (calibrate later)
 
 ; Motion (start conservative)
